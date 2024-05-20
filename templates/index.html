@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Quant AI App</title>
+    <style>
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+        }
+        th {
+            padding-top: 12px;
+            padding-bottom: 12px;
+            text-align: left;
+            background-color: #f2f2f2;
+        }
+    </style>
+</head>
+<body>
+    <h1>Stock and Options Price Predictor</h1>
+    <form method="post" action="/predict">
+        <label for="ticker">Ticker Symbol:</label>
+        <input type="text" id="ticker" name="ticker" required><br><br>
+        <input type="submit" value="Predict">
+    </form>
+    {% if prediction_text %}
+        <h2>{{ prediction_text }}</h2>
+    {% endif %}
+    {% if prediction_range %}
+        <h3>{{ prediction_range }}</h3>
+    {% endif %}
+    {% if options_data %}
+        <h3>Options Data:</h3>
+        {% for option in options_data %}
+            <h4>Expiration Date: {{ option.expirationDate }}</h4>
+            <table>
+                <tr>
+                    <th colspan="7">Calls</th>
+                    <th colspan="7">Puts</th>
+                </tr>
+                <tr>
+                    <th>Strike</th>
+                    <th>Last Price</th>
+                    <th>Bid</th>
+                    <th>Ask</th>
+                    <th>Change</th>
+                    <th>Volume</th>
+                    <th>Open Interest</th>
+                    <th>Strike</th>
+                    <th>Last Price</th>
+                    <th>Bid</th>
+                    <th>Ask</th>
+                    <th>Change</th>
+                    <th>Volume</th>
+                    <th>Open Interest</th>
+                </tr>
+                {% set calls = option.calls %}
+                {% set puts = option.puts %}
+                {% for i in range(calls|length) %}
+                    <tr>
+                        {% if i < calls|length %}
+                            <td>{{ calls[i].strike }}</td>
+                            <td>{{ calls[i].lastPrice }}</td>
+                            <td>{{ calls[i].bid }}</td>
+                            <td>{{ calls[i].ask }}</td>
+                            <td>{{ calls[i].change }}</td>
+                            <td>{{ calls[i].volume }}</td>
+                            <td>{{ calls[i].openInterest }}</td>
+                        {% else %}
+                            <td colspan="7"></td>
+                        {% endif %}
+                        {% if i < puts|length %}
+                            <td>{{ puts[i].strike }}</td>
+                            <td>{{ puts[i].lastPrice }}</td>
+                            <td>{{ puts[i].bid }}</td>
+                            <td>{{ puts[i].ask }}</td>
+                            <td>{{ puts[i].change }}</td>
+                            <td>{{ puts[i].volume }}</td>
+                            <td>{{ puts[i].openInterest }}</td>
+                        {% else %}
+                            <td colspan="7"></td>
+                        {% endif %}
+                    </tr>
+                {% endfor %}
+            </table>
+        {% endfor %}
+    {% endif %}
+    {% if news_data %}
+        <h3>Recent News:</h3>
+        <ul>
+            {% for article in news_data %}
+                <li>
+                    <a href="{{ article.link }}" target="_blank">{{ article.title }}</a><br>
+                    {{ article.publisher }} - {{ article.date }}<br>
+                    Sentiment: 
+                    {% if article.sentiment > 0 %}
+                        Positive
+                    {% elif article.sentiment < 0 %}
+                        Negative
+                    {% else %}
+                        Neutral
+                    {% endif %}
+                </li>
+            {% endfor %}
+        </ul>
+    {% endif %}
+    {% if economic_events %}
+        <h3>Upcoming Economic Events:</h3>
+        <ul>
+            {% for event in economic_events %}
+                <li>
+                    {{ event.date }} - {{ event.event }}
+                </li>
+            {% endfor %}
+        </ul>
+    {% endif %}
+</body>
+</html>
