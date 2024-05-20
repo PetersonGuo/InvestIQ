@@ -7,29 +7,36 @@ from tensorflow.keras.models import Model
 import tensorflow as tf
 import datetime
 
+
 print(f"TensorFlow has access to the following devices:\n{tf.config.list_physical_devices()}")
+
 
 # Fetch data for multiple ticker symbols
 def fetch_data(ticker_symbols, start_date, end_date):
+    # Join ticker symbols into a single string separated by spaces
+    ticker_string = ' '.join(ticker_symbols)
+
+    # Fetch historical stock data for all ticker symbols simultaneously
+    df = yf.download(ticker_string, start=start_date, end=end_date, group_by='tickers')
+
+    # Add additional features, handle missing values, etc.
     dfs = []
     for symbol in ticker_symbols:
-        # Fetch historical stock data
-        df = yf.download(symbol, start=start_date, end=end_date)
-
-        # Preprocess data (calculate additional features, handle missing values, etc.)
-        df['MA10'] = df['Close'].rolling(window=10).mean()
-        df['MA50'] = df['Close'].rolling(window=50).mean()
-        df['RSI'] = 100 - (100 / (1 + df['Close'].pct_change().rolling(window=14).mean()))
-        df['Return'] = df['Close'].pct_change()
-        df['Symbol'] = symbol
-        df = df.dropna()
-
-        dfs.append(df.copy())  # Create a copy of the dataframe
+        symbol_data = df[symbol].copy()
+        # symbol_data = symbol_data.to_frame()  # Convert Series to DataFrame
+        symbol_data['MA10'] = symbol_data['Adj Close'].rolling(window=10).mean()
+        symbol_data['MA50'] = symbol_data['Adj Close'].rolling(window=50).mean()
+        symbol_data['RSI'] = 100 - (100 / (1 + symbol_data['Adj Close'].pct_change().rolling(window=14).mean()))
+        symbol_data['Return'] = symbol_data['Adj Close'].pct_change()
+        symbol_data['Symbol'] = symbol
+        symbol_data = symbol_data.dropna()
+        dfs.append(symbol_data)
 
     if len(dfs) > 0:
         return pd.concat(dfs)
     else:
         return None
+
 
 # Normalize the data
 def normalize_data(df):
@@ -38,13 +45,15 @@ def normalize_data(df):
     df.iloc[:, :-1] = scaled_data
     return df, scaler
 
+
 # Create sequences for LSTM
 def create_sequences(data, target, seq_length):
     sequences, targets = [], []
     for i in range(len(data) - seq_length):
-        sequences.append(data[i:i+seq_length])
-        targets.append(target[i+seq_length])
+        sequences.append(data[i:i + seq_length])
+        targets.append(target[i + seq_length])
     return np.array(sequences), np.array(targets)
+
 
 # Split data into training and testing sets
 def split_data(X, y, split_ratio=0.8):
@@ -52,6 +61,7 @@ def split_data(X, y, split_ratio=0.8):
     X_train, X_test = X[:split], X[split:]
     y_train, y_test = y[:split], y[split:]
     return X_train, X_test, y_train, y_test
+
 
 # Define a list of ticker symbols
 ticker_symbols = [
