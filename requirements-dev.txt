@@ -3,6 +3,6 @@ pandas
 numpy
 scikit-learn
 yfinance
-tensorflow[and-cuda] >= 2.13.1
+tensorflow[and-cuda]
 tensorrt-cu12
 tensorrt >= 10.0.1

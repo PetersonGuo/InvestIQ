@@ -1,3 +1,4 @@
+import json
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -64,48 +65,8 @@ def split_data(X, y, split_ratio=0.8):
 
 
 # Define a list of ticker symbols
-ticker_symbols = [
-    "MSFT", "AAPL", "NVDA", "GOOGL", "GOOG", "AMZN", "META", "BRK-B", "LLY", "AVGO",
-    "JPM", "TSLA", "V", "XOM", "WMT", "UNH", "MA", "PG", "JNJ", "COST", "HD", "ORCL",
-    "MRK", "BAC", "CVX", "ABBV", "CRM", "KO", "NFLX", "AMD", "PEP", "TMO", "ADBE",
-    "QCOM", "WFC", "LIN", "DHR", "MCD", "CSCO", "TMUS", "ACN", "DIS", "INTU", "ABT",
-    "TXN", "AMAT", "GE", "AXP", "CAT", "VZ", "AMGN", "MS", "PFE", "NOW", "NEE", "IBM",
-    "PM", "CMCSA", "BX", "GS", "UNP", "COP", "ISRG", "SCHW", "NKE", "MU", "RTX", "SPGI",
-    "UBER", "INTC", "HON", "LOW", "ETN", "UPS", "SYK", "ELV", "BKNG", "T", "PGR", "C",
-    "BLK", "LRCX", "VRTX", "MDT", "TJX", "BA", "LMT", "CB", "DE", "BSX", "REGN", "ADI",
-    "MMC", "ADP", "PLD", "PANW", "KLAC", "ANET", "CI", "MDLZ", "ABNB", "AMT", "FI", "BMY",
-    "CMG", "SBUX", "SO", "SNPS", "HCA", "WM", "GILD", "GD", "DUK", "ZTS", "ICE", "APH",
-    "SHW", "MO", "CDNS", "FCX", "CL", "CME", "EQIX", "MCO", "ITW", "EOG", "TT", "TGT",
-    "MCK", "CVS", "TDG", "CTAS", "PH", "NOC", "SLB", "NXPI", "BDX", "MAR", "PYPL", "CEG",
-    "ECL", "CSX", "USB", "EMR", "PNC", "AON", "FDX", "MPC", "PSX", "MSI", "WELL", "ORLY",
-    "RSG", "CARR", "APD", "MMM", "ROP", "MNST", "AJG", "OXY", "PCAR", "VLO", "COF", "BLK",
-    "EW", "TFC", "AIG", "MET", "CPRT", "NSC", "DXCM", "BDX", "ICE", "APH", "SHW", "MO",
-    "CDNS", "FCX", "CL", "CME", "EQIX", "MCO", "ITW", "EOG", "TT", "TGT", "MCK", "CVS",
-    "TDG", "CTAS", "PH", "NOC", "SLB", "NXPI", "BDX", "MAR", "PYPL", "CEG", "ECL", "CSX",
-    "USB", "EMR", "PNC", "AON", "FDX", "MPC", "PSX", "MSI", "WELL", "ORLY", "RSG", "CARR",
-    "APD", "MMM", "ROP", "MNST", "AJG", "OXY", "PCAR", "VLO", "COF", "AFL", "DHI", "SRE",
-    "AEP", "HES", "SPG", "EL", "OKE", "F", "O", "ADSK", "FTNT", "STZ", "JCI", "DLR", "GWW",
-    "TEL", "LEN", "KDP", "URI", "PAYX", "KMB", "A", "IDXX", "D", "ALL", "CCI", "GEV", "BK",
-    "ROST", "COR", "KMI", "KHC", "FIS", "PRU", "AMP", "HUM", "LHX", "IQV", "HSY", "CNC",
-    "MSA", "BLL", "ED", "GIS", "LUV", "FAST", "CERN", "WEC", "RMD", "WBA", "WY", "APH",
-    "NLOK", "HRL", "DAL", "TROW", "KEYS", "CMI", "VFC", "CMS", "LULU", "BAX", "ZBRA",
-    "PXD", "BR", "SYY", "PHM", "RCL", "MTB", "EXC", "PKI", "TTWO", "VTR", "ODFL", "HAL",
-    "AFL", "DHI", "SRE", "AEP", "HES", "SPG", "EL", "OKE", "F", "O", "ADSK", "FTNT", "STZ",
-    "JCI", "DLR", "GWW", "TEL", "LEN", "KDP", "URI", "PAYX", "KMB", "A", "IDXX", "D", "ALL",
-    "CCI", "GEV", "BK", "ROST", "COR", "KMI", "KHC", "FIS", "PRU", "AMP", "HUM", "LHX", "IQV",
-    "HSY", "CNC", "MSA", "BLL", "ED", "GIS", "LUV", "FAST", "CERN", "WEC", "RMD", "WBA",
-    "WY", "APH", "NLOK", "HRL", "DAL", "TROW", "KEYS", "CMI", "VFC", "CMS", "LULU", "BAX",
-    "ZBRA", "PXD", "BR", "SYY", "PHM", "RCL", "MTB", "EXC", "PKI", "TTWO", "VTR", "ODFL",
-    "HAL", "LH", "WLTW", "DG", "AMP", "WMB", "MXIM", "CNP", "ESS", "J", "CAG", "HSIC",
-    "VRSK", "EOC", "MGM", "XLNX", "AJRD", "FFIV", "ZION", "BKR", "ULTA", "AIZ", "LYB",
-    "TYL", "MCHP", "CCL", "LNC", "MNST", "HLT", "DTE", "FTV", "AME", "COO", "WYNN", "XRAY",
-    "UAL", "TT", "EDU", "CFG", "CERN", "WEC", "RMD", "WBA", "WY", "APH", "NLOK", "HRL",
-    "DAL", "TROW", "KEYS", "CMI", "VFC", "CMS", "LULU", "BAX", "ZBRA", "PXD", "BR", "SYY",
-    "PHM", "RCL", "MTB", "EXC", "PKI", "TTWO", "VTR", "ODFL", "HAL", "LH", "WLTW", "DG",
-    "AMP", "WMB", "MXIM", "CNP", "ESS", "J", "CAG", "HSIC", "VRSK", "EOC", "MGM", "XLNX",
-    "AJRD", "FFIV", "ZION", "BKR", "ULTA", "AIZ", "LYB", "TYL", "MCHP", "CCL", "LNC",
-    "MNST", "HLT", "DTE", "FTV", "AME", "COO", "WYNN", "XRAY", "UAL", "TT", "EDU", "CFG"
-]
+with open('ticker_symbols.json', 'r') as f:
+    ticker_symbols = json.load(f)
 
 # Fetch historical data for multiple ticker symbols
 df = fetch_data(ticker_symbols, '1970-01-01', datetime.datetime.today().date())
@@ -124,24 +85,22 @@ if df is not None:
         symbol_data = scaled_df[scaled_df['Symbol'] == symbol].drop('Symbol', axis=1)
         X_symbol, y_symbol = create_sequences(symbol_data[features].values, symbol_data[target].values, seq_length=60)
         X_train, X_test, y_train, y_test = split_data(X_symbol, y_symbol)
-        X_train_list.append(X_train)
-        X_test_list.append(X_test)
-        y_train_list.append(y_train)
-        y_test_list.append(y_test)
+        X_train_list.extend(X_train)
+        X_test_list.extend(X_test)
+        y_train_list.extend(y_train)
+        y_test_list.extend(y_test)
 
-    # Concatenate sequences for all ticker symbols
-    X_train = np.concatenate(X_train_list)
-    X_test = np.concatenate(X_test_list)
-    y_train = np.concatenate(y_train_list)
-    y_test = np.concatenate(y_test_list)
+    # Convert lists to numpy arrays
+    X_train = np.array(X_train_list)
+    X_test = np.array(X_test_list)
+    y_train = np.array(y_train_list)
+    y_test = np.array(y_test_list)
 
     # Define input shape
     input_shape = X_train.shape[1:]
 
-    # Create the input layer
-    input_layer = Input(shape=input_shape)
-
     # Build the LSTM model
+    input_layer = Input(shape=input_shape)
     lstm_layer1 = LSTM(50, return_sequences=True)(input_layer)
     dropout_layer1 = Dropout(0.2)(lstm_layer1)
     lstm_layer2 = LSTM(50, return_sequences=False)(dropout_layer1)
@@ -150,7 +109,6 @@ if df is not None:
 
     # Define the model
     model = Model(inputs=input_layer, outputs=output_layer)
-
     model.compile(optimizer='adam', loss='mean_squared_error')
 
     # Train the model

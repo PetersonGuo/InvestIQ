@@ -9,6 +9,7 @@ from textblob import TextBlob
 # Function to fetch and preprocess stock data
 def fetch_and_preprocess(ticker):
     df = yf.download(ticker, period='2y')
+    print(df)
     df['MA10'] = df['Close'].rolling(window=10).mean()
     df['MA50'] = df['Close'].rolling(window=50).mean()
     df['RSI'] = 100 - (100 / (1 + df['Close'].pct_change().rolling(window=14).mean()))
