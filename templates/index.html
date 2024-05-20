@@ -27,6 +27,9 @@
         <input type="text" id="ticker" name="ticker" required><br><br>
         <input type="submit" value="Predict">
     </form>
+    {% if ticker %}
+        <h2>Results for {{ ticker }}</h2>
+    {% endif %}
     {% if prediction_text %}
         <h2>{{ prediction_text }}</h2>
     {% endif %}
