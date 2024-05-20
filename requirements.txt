@@ -1,9 +1,10 @@
+wheel
 flask
 pandas
 numpy
 scikit-learn
-matplotlib
 yfinance
-alpha_vantage
-tensorflow
+tensorflow[and-cuda] >= 2.13.1
 textblob
+tensorrt-cu12
+tensorrt >= 10.0.1

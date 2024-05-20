@@ -1,0 +1,6 @@
+pandas
+numpy
+scikit-learn
+yfinance
+tensorflow-macos
+tensorflow-metal

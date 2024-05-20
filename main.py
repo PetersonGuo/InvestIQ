@@ -21,10 +21,8 @@ def fetch_data(ticker_symbols, start_date, end_date):
         df['MA50'] = df['Close'].rolling(window=50).mean()
         df['RSI'] = 100 - (100 / (1 + df['Close'].pct_change().rolling(window=14).mean()))
         df['Return'] = df['Close'].pct_change()
-        df = df.dropna()
-
-        # Add a column to identify the ticker symbol
         df['Symbol'] = symbol
+        df = df.dropna()
 
         dfs.append(df.copy())  # Create a copy of the dataframe
 
@@ -57,7 +55,7 @@ def split_data(X, y, split_ratio=0.8):
 
 # Define a list of ticker symbols
 ticker_symbols = [
-    "MSFT", "AAPL", "NVDA", "GOOGL", "GOOG", "AMZN", "META", "BRK.B", "LLY", "AVGO",
+    "MSFT", "AAPL", "NVDA", "GOOGL", "GOOG", "AMZN", "META", "BRK-B", "LLY", "AVGO",
     "JPM", "TSLA", "V", "XOM", "WMT", "UNH", "MA", "PG", "JNJ", "COST", "HD", "ORCL",
     "MRK", "BAC", "CVX", "ABBV", "CRM", "KO", "NFLX", "AMD", "PEP", "TMO", "ADBE",
     "QCOM", "WFC", "LIN", "DHR", "MCD", "CSCO", "TMUS", "ACN", "DIS", "INTU", "ABT",
@@ -100,7 +98,7 @@ ticker_symbols = [
 ]
 
 # Fetch historical data for multiple ticker symbols
-df = fetch_data(ticker_symbols, '2010-01-01', datetime.datetime.today().date())
+df = fetch_data(ticker_symbols, '1970-01-01', datetime.datetime.today().date())
 
 if df is not None:
     # Define features and target variable

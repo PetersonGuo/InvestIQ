@@ -70,7 +70,7 @@ def fetch_economic_events():
     ]
 
 # Load the pre-trained model and error standard deviation
-model = tf.keras.models.load_model('lstm_model_multiple_symbols.keras')
+model = tf.keras.models.load_model('lstm_model.keras')
 error_std = np.load('error_std.npy')
 
 # Create the Flask app
