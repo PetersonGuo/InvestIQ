@@ -8,7 +8,14 @@ from textblob import TextBlob
 
 # Function to fetch and preprocess stock data
 def fetch_and_preprocess(ticker):
-    df = yf.download(ticker, period='2y')
+    stock = yf.Ticker(ticker)
+    df = stock.history(period='2y')
+    if df.empty:
+        return None, None, None
+
+    # Fetch current market price
+    current_price = stock.history(period='1d')['Close'].iloc[-1]
+
     df['MA10'] = df['Close'].rolling(window=10).mean()
     df['MA50'] = df['Close'].rolling(window=50).mean()
     df['RSI'] = 100 - (100 / (1 + df['Close'].pct_change().rolling(window=14).mean()))
@@ -24,7 +31,7 @@ def fetch_and_preprocess(ticker):
     scaler = MinMaxScaler()
     scaled_data = scaler.fit_transform(df[features])
     scaled_df = pd.DataFrame(scaled_data, columns=features, index=df.index)
-    return scaled_df, scaler, df
+    return scaled_df, scaler, df, current_price
 
 # Function to create sequences for LSTM
 def create_sequences(data, seq_length):
@@ -63,6 +70,40 @@ def fetch_economic_events():
         {'date': '2023-07-01', 'event': 'US Jobs Report'}
     ]
 
+# Function to fetch additional stock information
+def fetch_additional_info(ticker):
+    stock = yf.Ticker(ticker)
+    info = {
+        'info': stock.info,
+        'history': stock.history(period='1mo').to_dict(orient='records'),
+        'history_metadata': stock.history_metadata,
+        'actions': stock.actions.to_dict(),
+        'dividends': stock.dividends.to_dict(),
+        'splits': stock.splits.to_dict(),
+        'capital_gains': stock.capital_gains.to_dict(),
+        'shares': stock.get_shares_full(start="2022-01-01", end=None),
+        'income_stmt': stock.income_stmt.to_dict(),
+        'quarterly_income_stmt': stock.quarterly_income_stmt.to_dict(),
+        'balance_sheet': stock.balance_sheet.to_dict(),
+        'quarterly_balance_sheet': stock.quarterly_balance_sheet.to_dict(),
+        'cashflow': stock.cashflow.to_dict(),
+        'quarterly_cashflow': stock.quarterly_cashflow.to_dict(),
+        'major_holders': stock.major_holders.to_dict(),
+        'institutional_holders': stock.institutional_holders.to_dict(orient='records'),
+        'mutualfund_holders': stock.mutualfund_holders.to_dict(orient='records'),
+        'insider_transactions': stock.insider_transactions.to_dict(orient='records'),
+        'insider_purchases': stock.insider_purchases.to_dict(orient='records'),
+        'insider_roster_holders': stock.insider_roster_holders.to_dict(orient='records'),
+        'recommendations': stock.recommendations.to_dict(orient='records'),
+        'recommendations_summary': stock.recommendations_summary.to_dict(orient='records'),
+        'upgrades_downgrades': stock.upgrades_downgrades.to_dict(orient='records'),
+        'earnings_dates': stock.earnings_dates.to_dict(),
+        'isin': stock.isin,
+        'options': stock.options,
+        'news': stock.news
+    }
+    return info
+
 # Load the pre-trained model and error standard deviation
 model = tf.keras.models.load_model('lstm_model.keras')
 train_error_std = np.load('train_error_std.npy')
@@ -78,7 +119,10 @@ def home():
 @app.route('/predict', methods=['POST'])
 def predict():
     ticker = request.form['ticker']
-    scaled_df, scaler, original_df = fetch_and_preprocess(ticker)
+    scaled_df, scaler, original_df, current_price = fetch_and_preprocess(ticker)
+    if scaled_df is None:
+        return render_template('index.html', error=f"Ticker symbol '{ticker}' not found or insufficient data.")
+
     seq_length = 60
     X = create_sequences(scaled_df.values, seq_length)
     last_sequence = X[-1]
@@ -93,14 +137,17 @@ def predict():
     options_data = fetch_options_data(ticker)
     news_data = fetch_news_data(ticker)
     economic_events = fetch_economic_events()
+    additional_info = fetch_additional_info(ticker)
 
     return render_template('index.html',
                            ticker=ticker,
+                           current_price=f'Current Market Price: {current_price:.2f}',
                            prediction_text=f'Predicted Next Day Close: {predicted_price:.2f}',
                            prediction_range=f'95% Prediction Interval: {lower_bound:.2f} - {upper_bound:.2f}',
                            options_data=options_data,
                            news_data=news_data,
-                           economic_events=economic_events)
+                           economic_events=economic_events,
+                           additional_info=additional_info)
 
 if __name__ == '__main__':
     app.run(debug=True)
