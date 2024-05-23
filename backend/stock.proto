@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+package stock;
+
+service StockService {
+  rpc GetPrediction (StockRequest) returns (StockResponse);
+}
+
+message StockRequest {
+  string ticker = 1;
+}
+
+message StockResponse {
+  string ticker = 1;
+  string current_price = 2;
+  string prediction_text = 3;
+  string prediction_range = 4;
+  repeated OptionData options_data = 5;
+  repeated NewsData news_data = 6;
+  repeated EconomicEvent economic_events = 7;
+  AdditionalInfo additional_info = 8;
+}
+
+message OptionData {
+  string expirationDate = 1;
+  repeated OptionDetail calls = 2;
+  repeated OptionDetail puts = 3;
+}
+
+message OptionDetail {
+  string strike = 1;
+  string lastPrice = 2;
+  string bid = 3;
+  string ask = 4;
+  string change = 5;
+  string volume = 6;
+  string openInterest = 7;
+}
+
+message NewsData {
+  string title = 1;
+  string link = 2;
+  string publisher = 3;
+  string date = 4;
+  double sentiment = 5;
+}
+
+message EconomicEvent {
+  string date = 1;
+  string event = 2;
+}
+
+message AdditionalInfo {
+  map<string, string> info = 1;
+  // Add other fields as needed
+}

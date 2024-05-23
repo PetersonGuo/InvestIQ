@@ -9,3 +9,4 @@ textblob
 tensorrt-cu12
 tensorrt >= 10.0.1
 python-dotenv
+flask-cors

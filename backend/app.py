@@ -1,17 +1,19 @@
-from flask import Flask, render_template, request, jsonify
+import json
+from flask import Flask, request, jsonify
 import yfinance as yf
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import MinMaxScaler
 import tensorflow as tf
 from textblob import TextBlob
+from flask_cors import CORS, cross_origin
 
 # Function to fetch and preprocess stock data
 def fetch_and_preprocess(ticker):
     stock = yf.Ticker(ticker)
     df = stock.history(period='2y')
     if df.empty:
-        return None, None, None
+        return None, None, None, None
 
     # Fetch current market price
     current_price = stock.history(period='1d')['Close'].iloc[-1]
@@ -47,12 +49,32 @@ def fetch_options_data(ticker):
     options_data = []
     for date in options_dates:
         options = stock.option_chain(date)
+        calls = options.calls.to_dict(orient='records')
+        puts = options.puts.to_dict(orient='records')
+
+        options_by_strike = {}
+
+        for call in calls:
+            strike = call['strike']
+            if strike not in options_by_strike:
+                options_by_strike[strike] = {'call': None, 'put': None}
+            options_by_strike[strike]['call'] = call
+
+        for put in puts:
+            strike = put['strike']
+            if strike not in options_by_strike:
+                options_by_strike[strike] = {'call': None, 'put': None}
+            options_by_strike[strike]['put'] = put
+
+        options_by_strike = [{'strike': float(k), 'call': v['call'], 'put': v['put']} for k, v in options_by_strike.items()]
+        options_by_strike.sort(key=lambda x: x['strike'])
+
         options_data.append({
             'expirationDate': date,
-            'calls': options.calls.to_dict(orient='records'),
-            'puts': options.puts.to_dict(orient='records')
+            'options': options_by_strike
         })
     return options_data
+
 
 # Function to fetch news data and analyze sentiment
 def fetch_news_data(ticker):
@@ -75,29 +97,29 @@ def fetch_additional_info(ticker):
     stock = yf.Ticker(ticker)
     info = {
         'info': stock.info,
-        'history': stock.history(period='1mo').to_dict(orient='records'),
+        'history': stock.history(period='1mo').reset_index().to_dict(orient='records'),
         'history_metadata': stock.history_metadata,
-        'actions': stock.actions.to_dict(),
-        'dividends': stock.dividends.to_dict(),
-        'splits': stock.splits.to_dict(),
-        'capital_gains': stock.capital_gains.to_dict(),
+        'actions': stock.actions.reset_index().to_dict(orient='records'),
+        'dividends': stock.dividends.reset_index().to_dict(orient='records'),
+        'splits': stock.splits.reset_index().to_dict(orient='records'),
+        'capital_gains': stock.capital_gains.reset_index().to_dict(orient='records'),
         'shares': stock.get_shares_full(start="2022-01-01", end=None),
-        'income_stmt': stock.income_stmt.to_dict(),
-        'quarterly_income_stmt': stock.quarterly_income_stmt.to_dict(),
-        'balance_sheet': stock.balance_sheet.to_dict(),
-        'quarterly_balance_sheet': stock.quarterly_balance_sheet.to_dict(),
-        'cashflow': stock.cashflow.to_dict(),
-        'quarterly_cashflow': stock.quarterly_cashflow.to_dict(),
+        'income_stmt': stock.income_stmt.reset_index().to_dict(orient='records'),
+        'quarterly_income_stmt': stock.quarterly_income_stmt.reset_index().to_dict(orient='records'),
+        'balance_sheet': stock.balance_sheet.reset_index().to_dict(orient='records'),
+        'quarterly_balance_sheet': stock.quarterly_balance_sheet.reset_index().to_dict(orient='records'),
+        'cashflow': stock.cashflow.reset_index().to_dict(orient='records'),
+        'quarterly_cashflow': stock.quarterly_cashflow.reset_index().to_dict(orient='records'),
         'major_holders': stock.major_holders.to_dict(),
         'institutional_holders': stock.institutional_holders.to_dict(orient='records'),
         'mutualfund_holders': stock.mutualfund_holders.to_dict(orient='records'),
-        'insider_transactions': stock.insider_transactions.to_dict(orient='records'),
-        'insider_purchases': stock.insider_purchases.to_dict(orient='records'),
-        'insider_roster_holders': stock.insider_roster_holders.to_dict(orient='records'),
-        'recommendations': stock.recommendations.to_dict(orient='records'),
-        'recommendations_summary': stock.recommendations_summary.to_dict(orient='records'),
-        'upgrades_downgrades': stock.upgrades_downgrades.to_dict(orient='records'),
-        'earnings_dates': stock.earnings_dates.to_dict(),
+        'insider_transactions': stock.insider_transactions.reset_index().to_dict(orient='records'),
+        'insider_purchases': stock.insider_purchases.reset_index().to_dict(orient='records'),
+        'insider_roster_holders': stock.insider_roster_holders.reset_index().to_dict(orient='records'),
+        'recommendations': stock.recommendations.reset_index().to_dict(orient='records'),
+        'recommendations_summary': stock.recommendations_summary.reset_index().to_dict(orient='records'),
+        'upgrades_downgrades': stock.upgrades_downgrades.reset_index().to_dict(orient='records'),
+        'earnings_dates': stock.earnings_dates.reset_index().to_dict(orient='records'),
         'isin': stock.isin,
         'options': stock.options,
         'news': stock.news
@@ -111,17 +133,19 @@ test_error_std = np.load('test_error_std.npy')
 
 # Create the Flask app
 app = Flask(__name__)
+CORS(app)
 
 @app.route('/')
 def home():
-    return render_template('index.html')
+    return "Stock Prediction API"
 
 @app.route('/predict', methods=['POST'])
+@cross_origin()
 def predict():
-    ticker = request.form['ticker']
+    ticker = request.json['ticker']
     scaled_df, scaler, original_df, current_price = fetch_and_preprocess(ticker)
     if scaled_df is None:
-        return render_template('index.html', error=f"Ticker symbol '{ticker}' not found or insufficient data.")
+        return jsonify({'error': f"Ticker symbol '{ticker}' not found or insufficient data."}), 400
 
     seq_length = 60
     X = create_sequences(scaled_df.values, seq_length)
@@ -130,7 +154,6 @@ def predict():
     prediction = model.predict(last_sequence_scaled)
     predicted_price = scaler.inverse_transform(np.array([[prediction[0][0], 0, 0, 0, 0, 0]]))[0][0]
 
-    # Calculate prediction intervals
     lower_bound = predicted_price - 1.96 * test_error_std
     upper_bound = predicted_price + 1.96 * test_error_std
 
@@ -139,15 +162,29 @@ def predict():
     economic_events = fetch_economic_events()
     additional_info = fetch_additional_info(ticker)
 
-    return render_template('index.html',
-                           ticker=ticker,
-                           current_price=f'Current Market Price: {current_price:.2f}',
-                           prediction_text=f'Predicted Next Day Close: {predicted_price:.2f}',
-                           prediction_range=f'95% Prediction Interval: {lower_bound:.2f} - {upper_bound:.2f}',
-                           options_data=options_data,
-                           news_data=news_data,
-                           economic_events=economic_events,
-                           additional_info=additional_info)
+    # Ensure datetime data is kept as strings
+    def convert_timestamps(data):
+        if isinstance(data, pd.Timestamp):
+            return data.isoformat()
+        elif isinstance(data, dict):
+            return {str(k): convert_timestamps(v) for k, v in data.items()}
+        elif isinstance(data, (list, np.ndarray, pd.Series, pd.Index, tuple)):
+            return [convert_timestamps(i) for i in data]
+        elif pd.isna(data):
+            return ''
+        return data
+
+    return jsonify({
+        'ticker': ticker.upper(),
+        'current_price': round(current_price, 2),
+        'prediction_text': round(predicted_price, 2),
+        'prediction_range_upper': round(upper_bound, 2),
+        'prediction_range_lower': round(lower_bound, 2),
+        'options_data': convert_timestamps(options_data),
+        'news_data': convert_timestamps(news_data),
+        'economic_events': convert_timestamps(economic_events),
+        'additional_info': convert_timestamps(additional_info)
+    })
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(port=8000, debug=True)
