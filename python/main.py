@@ -236,7 +236,7 @@ if df is not None:
     test_error_std = np.std(test_errors)
 
     # Save the model and the standard deviation of errors
-    model.save('lstm_model_bloomberg.keras')
+    model.save('lstm_model.keras')
     np.save('train_error_std.npy', train_error_std)
     np.save('test_error_std.npy', test_error_std)
 
