@@ -9,6 +9,12 @@ import datetime
 from tqdm import tqdm
 import json
 
+IBKR_RATE_LIMIT = {
+    'REQUEST_LIMIT': 60,            # requests
+    'REQUEST_INTERVAL': 600,        # 10 minutes
+    'IBKR_SAME_TICKER_LIMIT': 6,    # requests
+    'IBKR_SAME_TICKER_INTERVAL': 2  # seconds
+}
 # Interactive Brokers API setup
 ib = ib_insync.IB()
 ib.connect('127.0.0.1', 7496, clientId=1)  # TWS paper trading port
@@ -16,8 +22,7 @@ ib.connect('127.0.0.1', 7496, clientId=1)  # TWS paper trading port
 print(f"TensorFlow has access to the following devices:\n{tf.config.list_physical_devices()}")
 
 # Function to fetch intraday data from IBKR
-def fetch_ibkr_data(ticker, count, end_date):
-    count += 1
+def fetch_ibkr_data(ticker, end_date):
     contract = ib_insync.Stock(ticker, 'SMART', 'USD')
     ib.qualifyContracts(contract)
 
@@ -117,14 +122,20 @@ with open('ticker_symbols.json', 'r') as f:
 end_date = datetime.datetime.now().strftime('%Y%m%d %H:%M:%S')
 start_date = (datetime.datetime.now() - datetime.timedelta(days=365)).strftime('%Y%m%d %H:%M:%S')
 all_data = []
-count = 0
+data_times = set()
+def pop_data_times():
+    global data_times
+    current_time = datetime.datetime.now()
+    data_times = {fetch for fetch in data_times if (current_time - fetch).seconds <= IBKR_RATE_LIMIT['REQUEST_INTERVAL']}
 for symbol in tqdm(ticker_symbols, desc="Fetching data"):
-    count += 1
-    if count > 60:
-        print("API limit reached. Please wait for a minute.")
-        ib.sleep(600)
-        count = 0
-    df = fetch_ibkr_data(symbol, count, end_date)
+    pop_data_times()
+    data_times.add(datetime.datetime.now())
+    if len(data_times) > IBKR_RATE_LIMIT['REQUEST_LIMIT']:
+        sleep_time = IBKR_RATE_LIMIT['REQUEST_INTERVAL'] - (datetime.datetime.now() - min(data_times)).seconds
+        print(f"Sleeping for {sleep_time} seconds")
+        ib.sleep(sleep_time)
+        pop_data_times()
+    df = fetch_ibkr_data(symbol, end_date)
     if not df.empty:
         df['symbol'] = symbol
         all_data.append(df)
