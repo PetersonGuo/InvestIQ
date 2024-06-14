@@ -8,3 +8,4 @@ tensorflow-metal
 textblob
 python-dotenv
 flask-cors
+ib_insync
