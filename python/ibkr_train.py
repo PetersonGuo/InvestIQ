@@ -122,14 +122,14 @@ with open('ticker_symbols.json', 'r') as f:
 end_date = datetime.datetime.now().strftime('%Y%m%d %H:%M:%S')
 start_date = (datetime.datetime.now() - datetime.timedelta(days=365)).strftime('%Y%m%d %H:%M:%S')
 all_data = []
-data_times = set()
+data_times = []
 def pop_data_times():
     global data_times
     current_time = datetime.datetime.now()
-    data_times = {fetch for fetch in data_times if (current_time - fetch).seconds <= IBKR_RATE_LIMIT['REQUEST_INTERVAL']}
+    data_times = [fetch for fetch in data_times if (current_time - fetch).seconds <= IBKR_RATE_LIMIT['REQUEST_INTERVAL']]
 for symbol in tqdm(ticker_symbols, desc="Fetching data"):
     pop_data_times()
-    data_times.add(datetime.datetime.now())
+    data_times.append(datetime.datetime.now())
     if len(data_times) > IBKR_RATE_LIMIT['REQUEST_LIMIT']:
         sleep_time = IBKR_RATE_LIMIT['REQUEST_INTERVAL'] - (datetime.datetime.now() - min(data_times)).seconds
         print(f"Sleeping for {sleep_time} seconds")
