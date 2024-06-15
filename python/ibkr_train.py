@@ -2,57 +2,86 @@ import ib_insync
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
-from tensorflow.keras.models import Model
+from tensorflow.keras.layers import LSTM, Dense, Dropout, Input # type: ignore
+from tensorflow.keras.models import Model # type: ignore
 import tensorflow as tf
 import datetime
 from tqdm import tqdm
+import requests
 import json
+import os
+import dotenv
 
-IBKR_RATE_LIMIT = {
-    'REQUEST_LIMIT': 60,            # requests
-    'REQUEST_INTERVAL': 600,        # 10 minutes
-    'IBKR_SAME_TICKER_LIMIT': 6,    # requests
-    'IBKR_SAME_TICKER_INTERVAL': 2  # seconds
-}
+# Load environment variables
+dotenv.load_dotenv()
+
+FRED_API_KEY = os.getenv('FRED_API_KEY')
+FRED_SERIES_ID = os.getenv('FRED_SERIES_ID')
+
+IBKR_HOST_IP = os.getenv('IBKR_HOST_IP')
+IBKR_HOST_PORT = int(os.getenv('IBKR_HOST_PORT'))
+IBKR_CURRENCY = os.getenv('IBKR_CURRENCY')
+IBKR_STOCK_EXCHANGE = os.getenv('IBKR_STOCK_EXCHANGE')
+IBKR_DURATION = os.getenv('IBKR_DURATION')
+IBKR_INTERVAL = os.getenv('IBKR_INTERVAL')
+IBKR_WHAT_TO_SHOW = os.getenv('IBKR_WHAT_TO_SHOW')
+IBKR_USE_RTH = bool(os.getenv('IBKR_USE_RTH'))
+
+TICKER_JSON = os.getenv('TICKER_JSON')
+
 # Interactive Brokers API setup
 ib = ib_insync.IB()
-ib.connect('127.0.0.1', 7496, clientId=1)  # TWS paper trading port
+ib.connect(IBKR_HOST_IP, IBKR_HOST_PORT, clientId=1)  # TWS paper trading port
 
 print(f"TensorFlow has access to the following devices:\n{tf.config.list_physical_devices()}")
 
 # Function to fetch intraday data from IBKR
-def fetch_ibkr_data(ticker, end_date):
-    contract = ib_insync.Stock(ticker, 'SMART', 'USD')
+def fetch_ibkr_data(ticker, end_date, whatToShow):
+    contract = ib_insync.Stock(ticker, IBKR_STOCK_EXCHANGE, IBKR_CURRENCY)
     ib.qualifyContracts(contract)
 
     bars = ib.reqHistoricalData(
         contract,
-        endDateTime=end_date,
-        durationStr='1 M',
-        barSizeSetting='30 mins',
-        whatToShow='TRADES',
-        useRTH=True
+        endDateTime=end_date.strftime('%Y%m%d %H:%M:%S'),
+        durationStr=IBKR_DURATION,
+        barSizeSetting=IBKR_INTERVAL,
+        whatToShow=whatToShow,
+        useRTH=IBKR_USE_RTH
     )
 
-    data = []
-    for bar in bars:
-        data.append({
-            'date': bar.date,
-            'open': bar.open,
-            'high': bar.high,
-            'low': bar.low,
-            'close': bar.close,
-            'volume': bar.volume
-        })
+    if not bars:
+        return pd.DataFrame()
 
-    return pd.DataFrame(data)
+    data = [{'date': bar.date, 'open': bar.open, 'high': bar.high, 'low': bar.low, 'close': bar.close, 'volume': bar.volume, 'symbol': ticker} for bar in bars]
 
-# Function to fetch Fed rates from IBKR (as economic data is not directly available, simulate with constant)
-def fetch_fed_rates(start_date, end_date):
-    date_range = pd.date_range(start=start_date, end=end_date, freq='D')
-    data = {'date': date_range, 'fed_rate': [0.05] * len(date_range)}  # Simulated constant Fed rate
-    return pd.DataFrame(data)
+    df = pd.DataFrame(data)
+    return df
+
+def fetch_interest_rates(start_date, end_date):
+    base_url = f'https://api.stlouisfed.org/fred/series/observations'
+
+    # Prepare the query parameters
+    params = {
+        'series_id': FRED_SERIES_ID,
+        'api_key': FRED_API_KEY,
+        'file_type': 'json',
+        'observation_start': start_date.strftime('%Y-%m-%d'),
+        'observation_end': end_date.strftime('%Y-%m-%d')
+    }
+
+    # Make the request to the API
+    response = requests.get(base_url, params=params)
+    response.raise_for_status()  # Raise an error for bad responses
+
+    # Parse the JSON response
+    data = response.json()['observations']
+
+    # Extract dates and rates into lists
+    records = [{'date': datetime.datetime.strptime(item['date'], "%Y-%m-%d"), 'fed_rate': float(item['value'])} for item in data]
+
+    # Create a DataFrame
+    df = pd.DataFrame(records)
+    return df
 
 # Calculate additional technical indicators
 def calculate_additional_indicators(df):
@@ -115,45 +144,47 @@ def split_data(X, y, split_ratio=0.8):
     return X_train, X_test, y_train, y_test
 
 # Define a list of ticker symbols
-with open('ticker_symbols.json', 'r') as f:
+with open(TICKER_JSON, 'r') as f:
     ticker_symbols = json.load(f)
 
 # Fetch historical data for multiple ticker symbols
-end_date = datetime.datetime.now().strftime('%Y%m%d %H:%M:%S')
-start_date = (datetime.datetime.now() - datetime.timedelta(days=365)).strftime('%Y%m%d %H:%M:%S')
-all_data = []
-data_times = []
-def pop_data_times():
-    global data_times
-    current_time = datetime.datetime.now()
-    data_times = [fetch for fetch in data_times if (current_time - fetch).seconds <= IBKR_RATE_LIMIT['REQUEST_INTERVAL']]
-for symbol in tqdm(ticker_symbols, desc="Fetching data"):
-    pop_data_times()
-    data_times.append(datetime.datetime.now())
-    if len(data_times) > IBKR_RATE_LIMIT['REQUEST_LIMIT']:
-        sleep_time = IBKR_RATE_LIMIT['REQUEST_INTERVAL'] - (datetime.datetime.now() - min(data_times)).seconds
-        print(f"Sleeping for {sleep_time} seconds")
-        ib.sleep(sleep_time)
-        pop_data_times()
-    df = fetch_ibkr_data(symbol, end_date)
-    if not df.empty:
-        df['symbol'] = symbol
-        all_data.append(df)
-    else:
-        print(f"No data found for {symbol}")
+end_date = datetime.datetime.now() - datetime.timedelta(minutes=15)
+start_date = (end_date - datetime.timedelta(days=365))
 
-if all_data:
-    df = pd.concat(all_data)
-else:
-    df = None
+all_data = []
+for symbol in tqdm(ticker_symbols, desc="Fetching data"):
+    for i in range(365):
+        end_date = end_date - datetime.timedelta(days=1)
+        to_concate = pd.DataFrame()
+        for whatToShow in IBKR_WHAT_TO_SHOW.split():
+            subset_df = fetch_ibkr_data(symbol, end_date, whatToShow)
+            if not subset_df.empty:
+                if to_concate.empty:
+                    to_concate = subset_df
+                else:
+                    to_concate = pd.merge(to_concate, subset_df, how='outer', on='date, symbol')
+            else:
+                print(f"No data found for {symbol}")
+        if not to_concate.empty:
+            all_data.append(to_concate)
+
+df = pd.concat(all_data) if all_data else None
 
 if df is not None:
     # Fetch additional economic data (Fed rates)
-    fed_rates_df = fetch_fed_rates(start_date, end_date)
+    fed_rates_df = fetch_interest_rates(start_date, end_date)
+    fed_rates_df['date'] = pd.to_datetime(fed_rates_df['date'])
+    fed_rates_df['date'] = fed_rates_df['date'].dt.tz_localize(None)
+    fed_rates_df.set_index('date', inplace=True)
+    fed_rates_df.sort_values('date', inplace=True)
+
+    df['date'] = pd.to_datetime(df['date'])
+    df['date'] = df['date'].dt.tz_localize(None)
+    df.set_index('date', inplace=True)
+    df.sort_values('date', inplace=True)
 
     # Merge market data with economic data
-    df['date'] = pd.to_datetime(df['date'])
-    df = df.merge(fed_rates_df, left_on='date', right_on='date', how='left')
+    df = pd.merge_asof(df, fed_rates_df, on='date', direction='backward')
 
     # Calculate additional technical indicators
     df = calculate_additional_indicators(df)
@@ -217,6 +248,7 @@ if df is not None:
 
     # Save the model and the standard deviation of errors
     model.save('lstm_model.keras')
+    np.save('scalers.npy', scalers)
     np.save('train_error_std.npy', train_error_std)
     np.save('test_error_std.npy', test_error_std)
 

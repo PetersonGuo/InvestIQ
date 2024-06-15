@@ -1,17 +1,39 @@
-import json
+import ib_insync
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import MinMaxScaler
+from tensorflow.keras.layers import LSTM, Dense, Dropout, Input  # type: ignore
+from tensorflow.keras.models import Model  # type: ignore
 import tensorflow as tf
 import datetime
 import asyncio
 import aiohttp
-from ib_insync import *
 import time
+import requests
+import json
+import os
+import dotenv
+
+# Load environment variables
+dotenv.load_dotenv()
+
+FRED_API_KEY = os.getenv('FRED_API_KEY')
+FRED_SERIES_ID = os.getenv('FRED_SERIES_ID')
+
+IBKR_HOST_IP = os.getenv('IBKR_HOST_IP')
+IBKR_HOST_PORT = int(os.getenv('IBKR_HOST_PORT'))
+IBKR_CURRENCY = os.getenv('IBKR_CURRENCY')
+IBKR_STOCK_EXCHANGE = os.getenv('IBKR_STOCK_EXCHANGE')
+IBKR_DURATION = '14400 S'  # 4 hours duration
+IBKR_INTERVAL = '1 secs'
+IBKR_WHAT_TO_SHOW = os.getenv('IBKR_WHAT_TO_SHOW')
+IBKR_USE_RTH = bool(os.getenv('IBKR_USE_RTH'))
+
+TICKER_JSON = os.getenv('TICKER_JSON')
 
 # Connect to IBKR TWS or IB Gateway
-ib = IB()
-ib.connect('127.0.0.1', 7497, clientId=1)
+ib = ib_insync.IB()
+ib.connect(IBKR_HOST_IP, IBKR_HOST_PORT, clientId=1)
 
 print(f"TensorFlow has access to the following devices:\n{tf.config.list_physical_devices()}")
 
@@ -20,24 +42,22 @@ model = tf.keras.models.load_model('lstm_model.keras')
 scalers = np.load('scalers.npy', allow_pickle=True).item()
 
 # Function to fetch real-time stock data
-def fetch_stock_data(ticker, end_date, interval='1 secs', duration='1800 S', retries=3, delay=60):
+def fetch_stock_data(ticker, end_date, interval='1 secs', duration='14400 S', retries=3, delay=60):
     all_data = []
-    current_date = end_date
-    for i in range(8):
+    for attempt in range(retries):
         try:
-            contract = Stock(ticker, 'SMART', 'USD')
+            contract = ib_insync.Stock(ticker, IBKR_STOCK_EXCHANGE, IBKR_CURRENCY)
             bars = ib.reqHistoricalData(
                 contract,
-                endDateTime=current_date.strftime('%Y%m%d %H:%M:%S'),
+                endDateTime=end_date.strftime('%Y%m%d %H:%M:%S'),
                 durationStr=duration,
                 barSizeSetting=interval,
-                whatToShow='TRADES',
-                useRTH=True,
+                whatToShow=IBKR_WHAT_TO_SHOW,
+                useRTH=IBKR_USE_RTH,
                 formatDate=1)
 
             if bars:
-                current_date -= datetime.timedelta(minutes=30)
-                df = util.df(bars)
+                df = ib_insync.util.df(bars)
                 df['symbol'] = ticker
                 all_data.append(df)
                 break
@@ -165,7 +185,7 @@ async def predict_real_time(ticker):
 if __name__ == '__main__':
     with open('ticker_symbols.json', 'r') as f:
         ticker_symbols = json.load(f)
-    
+
     for ticker in ticker_symbols:
         print(f"Predicting for {ticker}")
         asyncio.run(predict_real_time(ticker))

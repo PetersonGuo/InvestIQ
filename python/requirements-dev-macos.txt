@@ -5,5 +5,4 @@ yfinance
 tensorflow-macos
 tensorflow-metal
 ib_insync
-aiohttp
-asyncio
+requests

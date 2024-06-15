@@ -7,5 +7,4 @@ tensorflow[and-cuda]
 tensorrt-cu12
 tensorrt >= 10.0.1
 ib_insync
-aiohttp
-asyncio
+requests

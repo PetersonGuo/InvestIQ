@@ -9,3 +9,4 @@ textblob
 python-dotenv
 flask-cors
 ib_insync
+requests

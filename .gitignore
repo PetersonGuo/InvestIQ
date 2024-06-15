@@ -1,0 +1,6 @@
+.env
+boost
+.vscode
+json-develop
+libtensorflow*
+.DS_Store
