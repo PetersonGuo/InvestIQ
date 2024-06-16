@@ -1,12 +1,9 @@
 wheel
-flask
 pandas
 numpy
 scikit-learn
-yfinance
 tensorflow[and-cuda]
 textblob
 tensorrt-cu12
 tensorrt >= 10.0.1
 python-dotenv
-flask-cors

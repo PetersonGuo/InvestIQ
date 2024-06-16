@@ -1,12 +1,9 @@
-flask
 pandas
 numpy
 scikit-learn
-yfinance
 tensorflow-macos
 tensorflow-metal
 textblob
 python-dotenv
-flask-cors
 ib_insync
 requests
