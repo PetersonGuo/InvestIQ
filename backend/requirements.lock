@@ -1,0 +1,3 @@
+# Test tooling only. The running backend is C++.
+pytest==9.1.1
+requests==2.34.2

@@ -1,0 +1,16 @@
+{
+  "dependencies": {
+    "lightweight-charts": "^5.2.0"
+  },
+  "name": "stockassist-workspace",
+  "private": true,
+  "scripts": {
+    "setup": "python3 -m venv backend/.venv && backend/.venv/bin/python -m pip install -r backend/requirements.lock && npm --prefix frontend ci && npm run build:backend",
+    "dev": "node scripts/dev.mjs",
+    "build": "npm run build:backend && npm --prefix frontend run build",
+    "lint": "npm --prefix frontend run lint",
+    "typecheck": "npm --prefix frontend run typecheck",
+    "test": "npm run build:backend && ctest --test-dir backend/build/native --output-on-failure && backend/.venv/bin/python -m pytest backend/tests/native -q",
+    "build:backend": "node scripts/build-native.mjs"
+  }
+}
