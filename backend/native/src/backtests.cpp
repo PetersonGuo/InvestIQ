@@ -29,7 +29,22 @@ J presets = J::array(
                       "rolling mean; exit when its z-score reaches exit_z. Can struggle "
                       "during persistent declines."},
       {"params", {{"lookback", 20}, {"entry_z", 2}, {"exit_z", 0}}},
-      {"warmup", 20}}});
+      {"warmup", 20}},
+     {{"template_id", "pairs_mean_reversion"},
+      {"name", "Cointegration pair mean reversion"},
+      {"description",
+       "Two-stock long/short spread strategy. Fits prior log prices, requires a 5% Engle–Granger "
+       "rejection, and trades either spread direction with exit and stop bands."},
+      {"params", {{"lookback", 60}, {"entry_z", 2}, {"exit_z", .5}, {"stop_z", 4}}},
+      {"warmup", 60},
+      {"tickers", J::array({"AAPL", "MSFT"})}},
+     {{"template_id", "equal_weight"},
+      {"name", "Equal-weight basket buy and hold"},
+      {"description",
+       "Allocate equally across the selected stocks at the first eligible open and hold."},
+      {"params", J::object()},
+      {"warmup", 0},
+      {"tickers", J::array({"AAPL", "MSFT", "NVDA"})}}});
 std::pair<J, J> load_bars(const J &q) {
   std::string interval = q["interval"], start = q["start_date"], end = q["end_date"],
               ticker = q["ticker"];
@@ -72,7 +87,54 @@ std::pair<J, J> load_bars(const J &q) {
   throw Error(422, "This window needs more than 40 historical pages. Choose a "
                    "shorter window or larger interval.");
 }
-J execute(const J &q, const J &bars) {
+struct Universe {
+  J data, bars, assets, benchmark, counts;
+};
+Universe load_universe(const J &q) {
+  std::map<std::string, J> histories;
+  J source;
+  std::vector<std::string> symbols = q["tickers"].get<std::vector<std::string>>();
+  if (std::find(symbols.begin(), symbols.end(), "SPY") == symbols.end())
+    symbols.push_back("SPY");
+  J counts = J::object();
+  for (const auto &ticker : symbols) {
+    J request = q;
+    request["ticker"] = ticker;
+    auto [metadata, bars] = load_bars(request);
+    if (!source.is_null() && source != metadata["source"])
+      throw Error(422, "All backtest symbols must use the same data source.");
+    source = metadata["source"];
+    counts[ticker] = bars.size();
+    J keyed = J::object();
+    for (auto &bar : bars)
+      keyed[bar["time"].get<std::string>()] = bar;
+    histories[ticker] = keyed;
+  }
+  std::vector<std::string> dates;
+  for (auto &[time, bar] : histories.at(q["ticker"]).items()) {
+    bool shared = true;
+    for (auto &[_, rows] : histories)
+      if (!rows.contains(time))
+        shared = false;
+    if (shared)
+      dates.push_back(time);
+  }
+  if (dates.size() < size_t(q["warmup"].get<int>() + 2))
+    throw Error(422, "Not enough shared bars across the strategy stocks and SPY after warmup.");
+  if (dates.size() * q["tickers"].size() > 200000)
+    throw Error(422, "Portfolio runs support up to 200,000 aligned asset-bars. Narrow the window.");
+  J assets = J::array(), benchmark = J::array();
+  for (auto &ticker : q["tickers"]) {
+    J rows = J::array();
+    for (auto &time : dates)
+      rows.push_back(histories.at(ticker)[time]);
+    assets.push_back({{"ticker", ticker}, {"bars", rows}});
+  }
+  for (auto &time : dates)
+    benchmark.push_back(histories.at("SPY")[time]);
+  return {{{"source", source}}, assets[0]["bars"], assets, benchmark, counts};
+}
+J execute(const J &q, const Universe &universe) {
   TempDir dir;
   bool cpp = q["language"] == "cpp";
   auto source = dir.path / (cpp ? "strategy.cpp" : "strategy.py");
@@ -80,6 +142,7 @@ J execute(const J &q, const J &bars) {
   auto module = source;
   if (cpp) {
     fs::copy_file(config.root / "simulation/strategy_api.h", dir.path / "strategy_api.h");
+    fs::copy_file(config.root / "simulation/pair_math.h", dir.path / "pair_math.h");
     module = dir.path / "strategy.so";
     std::vector<std::string> args = {env("CXX", "c++"), "-std=c++17", "-O3"};
 #ifdef __APPLE__
@@ -92,13 +155,14 @@ J execute(const J &q, const J &bars) {
     process(args, dir.path, 30, dir.path / "compile.log");
   }
   J settings = J::object();
-  for (auto key : {"initial_cash", "commission", "slippage_bps", "warmup", "interval"})
+  for (auto key : {"initial_cash", "commission", "slippage_bps", "warmup", "interval",
+                   "max_gross_exposure", "borrow_rate_percent"})
     settings[key] = q[key];
-  J input = {{"language", q["language"]},
-             {"module_path", module.string()},
-             {"params", q["params"]},
-             {"bars", bars},
-             {"settings", settings}};
+  J input = {
+      {"language", q["language"]}, {"module_path", module.string()},       {"params", q["params"]},
+      {"bars", universe.bars},     {"benchmark_bars", universe.benchmark}, {"settings", settings}};
+  if (q["tickers"].size() > 1)
+    input["assets"] = universe.assets;
   write(dir.path / "request.json", input.dump());
   process({config.worker.string(), (dir.path / "request.json").string(),
            (dir.path / "result.json").string()},
@@ -129,10 +193,12 @@ class Jobs {
     try {
       Db d;
       d.exec("UPDATE backtest_runs SET status='running' WHERE id=?", {work.id});
-      auto [data, bars] = load_bars(q);
+      auto universe = load_universe(q);
+      auto &data = universe.data;
+      auto &bars = universe.bars;
       if (bars.size() < 2 || bars.size() <= size_t(q["warmup"].get<int>() + 1))
         throw Error(422, "Not enough available bars in this date range after warmup.");
-      std::string data_hash = hash(bars.dump()),
+      std::string data_hash = hash(universe.assets.dump() + universe.benchmark.dump()),
                   data_key = hash(work.key + data["source"].get<std::string>() + data_hash);
       J result = nullptr;
       if (!q["force_rerun"].get<bool>()) {
@@ -143,9 +209,10 @@ class Jobs {
           result = J::parse(cached[0]["result_json"].get<std::string>());
       }
       if (result.is_null())
-        result = execute(q, bars);
+        result = execute(q, universe);
       std::string interval = q["interval"];
       result["engine_version"] = "3.0.0-native-cpp";
+      result["engine_build"] = SA_BUILD_ID;
       result["interval"] = interval;
       result["data"] = {{"ticker", q["ticker"]},
                         {"source", data["source"]},
@@ -154,9 +221,14 @@ class Jobs {
                         {"bar_count", bars.size()},
                         {"sha256", data_hash},
                         {"bars", bars}};
+      result["data"]["tickers"] = q["tickers"];
+      result["data"]["assets"] = universe.assets;
+      result["data"]["benchmark_ticker"] = "SPY";
+      result["data"]["benchmark_bars"] = universe.benchmark;
+      result["data"]["available_bars_before_alignment"] = universe.counts;
       result["assumptions"] = J::array(
-          {interval + " completed regular-session bars; long-only, one symbol, "
-                      "whole shares, no leverage.",
+          {interval + " completed regular-session bars, intersected with SPY and every portfolio "
+                      "symbol; no forward filling. Whole shares.",
            "Signals at close fill at the next available bar open, with fees "
            "and adverse slippage.",
            "Buy-and-hold benchmark enters on the first tradable open after "
@@ -168,11 +240,23 @@ class Jobs {
                             : "UTC timestamps and exclusive end time. Annualized return and "
                               "Sharpe are omitted for intraday runs. Win rate is per "
                               "realized sell fill.",
-           "No dividends, borrow, taxes, liquidity caps, or delisted-universe "
+           "No dividends, taxes, liquidity caps, or delisted-universe "
            "correction. Historical bars may be split-adjusted.",
            "Today's scanner candidates are not a point-in-time historical "
            "universe. Avoid interpreting selection-biased results as expected "
            "returns."});
+      result["assumptions"].push_back(
+          "SPY is a tradable S&P 500 price-return proxy, not the total-return index. All "
+          "references use the same aligned dates, warmup, capital and execution costs.");
+      if (q["tickers"].size() > 1) {
+        result["assumptions"].push_back(
+            "Signed portfolio weights allow long/short positions. Gross exposure is capped at "
+            "signal time; market moves can increase realized exposure. No broker "
+            "maintenance-margin or borrow-availability model.");
+        result["assumptions"].push_back(
+            "Short borrow is charged on prior-close short value over elapsed calendar time at the "
+            "configured annual rate. No interest on cash or financing charge for long leverage.");
+      }
       d.exec("BEGIN IMMEDIATE");
       d.exec("UPDATE backtest_runs SET status='completed',result_json=? WHERE "
              "id=?",
@@ -297,6 +381,7 @@ J backtest_list() {
   for (auto &row : rows) {
     auto q = J::parse(row["request_json"].get<std::string>());
     row.erase("request_json");
+    row["tickers"] = q.value("tickers", J::array({q["ticker"]}));
     for (auto key : {"name", "language", "ticker"})
       row[key] = q[key];
   }

@@ -72,7 +72,10 @@ def test_paper_account_transaction_and_persistence(launch):
     )
     assert order.status_code == 201
     portfolio = client.get("/api/portfolio").json()
-    assert portfolio["cash_cents"] == 10000000 - order.json()["price_cents"] * 3
+    assert (
+        portfolio["cash_cents"]
+        == 10000000 - order.json()["price_cents"] * 3 - order.json()["fee_cents"]
+    )
     assert (
         client.post(
             "/api/order", json={"ticker": "AAPL", "side": "sell", "quantity": 4}
@@ -89,10 +92,16 @@ def test_paper_account_transaction_and_persistence(launch):
         ).status_code
         == 201
     )
-    assert client.get("/api/portfolio").json()["cash_cents"] == 10000000
+    assert client.get("/api/portfolio").json()["cash_cents"] < 10000000
 
 
-def test_concurrent_orders_cannot_overspend(client):
+def test_concurrent_orders_cannot_overspend(launch):
+    client, _, db = launch()
+    quote = client.get("/api/stocks/AAPL/quote").json()
+    with sqlite3.connect(db) as connection:
+        connection.execute(
+            "UPDATE account SET cash_cents=?", (round(quote["ask"] * 100) * 100 + 100,)
+        )
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
         statuses = list(
             pool.map(

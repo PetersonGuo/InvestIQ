@@ -265,12 +265,18 @@ void initialize() {
                         "CREATE TABLE IF NOT EXISTS orders(id TEXT PRIMARY KEY,ticker TEXT NOT "
                         "NULL,side TEXT NOT NULL,quantity INTEGER NOT NULL,price_cents INTEGER "
                         "NOT NULL,created_at TEXT NOT NULL,price_as_of TEXT NOT NULL)",
+                        "CREATE TABLE IF NOT EXISTS order_details(id TEXT PRIMARY KEY,request_id "
+                        "TEXT UNIQUE,request_json TEXT NOT NULL,detail_json TEXT NOT NULL)",
+                        "CREATE TABLE IF NOT EXISTS paper_liquidity(key TEXT PRIMARY KEY,used "
+                        "INTEGER NOT NULL,updated REAL NOT NULL)",
                         "CREATE TABLE IF NOT EXISTS alerts(id TEXT PRIMARY KEY,ticker TEXT NOT "
                         "NULL,direction TEXT NOT NULL,threshold REAL NOT NULL,active INTEGER "
                         "NOT NULL DEFAULT 1,triggered_at TEXT,created_at TEXT NOT NULL)",
                         "CREATE TABLE IF NOT EXISTS strategies(id TEXT PRIMARY KEY,name TEXT "
                         "NOT NULL,language TEXT NOT NULL,code TEXT NOT NULL,params_json TEXT "
                         "NOT NULL,updated_at TEXT NOT NULL)",
+                        "CREATE TABLE IF NOT EXISTS strategy_context(id TEXT PRIMARY "
+                        "KEY,tickers_json TEXT NOT NULL)",
                         "CREATE TABLE IF NOT EXISTS backtest_runs(id TEXT PRIMARY KEY,status "
                         "TEXT NOT NULL,created_at TEXT NOT NULL,request_json TEXT NOT "
                         "NULL,result_json TEXT,error TEXT)",
@@ -377,10 +383,27 @@ J validate_strategy(J j) {
   auto name = text(j, "name", "My strategy", 100), code = text(j, "code", "", 64000);
   if (name.empty() || code.empty())
     throw Error(422, "Name and code are required.");
-  return {{"name", name},
-          {"code", code},
-          {"language", choice(j, "language", "", {"python", "cpp"})},
-          {"params", p}};
+  J out = {{"name", name},
+           {"code", code},
+           {"language", choice(j, "language", "", {"python", "cpp"})},
+           {"params", p}};
+  if (j.contains("tickers")) {
+    auto values = j["tickers"];
+    if (!values.is_array() || values.empty() || values.size() > 10)
+      throw Error(422, "Choose 1–10 stock symbols.");
+    std::vector<std::string> seen;
+    for (auto &value : values) {
+      if (!value.is_string())
+        throw Error(422, "Stock symbols must be strings.");
+      auto ticker = symbol(value.get<std::string>());
+      if (std::find(seen.begin(), seen.end(), ticker) != seen.end())
+        throw Error(422, "Stock symbols must be distinct.");
+      seen.push_back(ticker);
+      value = ticker;
+    }
+    out["tickers"] = values;
+  }
+  return out;
 }
 J validate_backtest(J j) {
   J out = validate_strategy(j);
@@ -394,7 +417,23 @@ J validate_backtest(J j) {
     throw Error(422, "Daily runs use dates.");
   if (i != "1d" && b - a > 31 * 86400)
     throw Error(422, "Intraday windows support up to 31 calendar days.");
-  out.update({{"ticker", symbol(text(j, "ticker"))},
+  J tickers = j.value("tickers", J::array({text(j, "ticker")}));
+  if (!tickers.is_array() || tickers.empty() || tickers.size() > 10)
+    throw Error(422, "Choose 1–10 stock symbols.");
+  std::vector<std::string> seen;
+  for (auto &value : tickers) {
+    if (!value.is_string())
+      throw Error(422, "Stock symbols must be strings.");
+    auto ticker = symbol(value.get<std::string>());
+    if (std::find(seen.begin(), seen.end(), ticker) != seen.end())
+      throw Error(422, "Stock symbols must be distinct.");
+    seen.push_back(ticker);
+    value = ticker;
+  }
+  out["tickers"] = tickers;
+  out["max_gross_exposure"] = number(j, "max_gross_exposure", 1, .1, 2);
+  out["borrow_rate_percent"] = number(j, "borrow_rate_percent", 3, 0, 100);
+  out.update({{"ticker", tickers[0]},
               {"interval", i},
               {"start_date", i == "1d" ? start : stamp(a)},
               {"end_date", i == "1d" ? end : stamp(b)},
@@ -414,8 +453,10 @@ J validate_pair(J j) {
          {"condition", choice(j, "condition", "outside", {"above", "below", "inside", "outside"})},
          {"threshold", number(j, "threshold", 2, -1e5, 1e5)},
          {"lookback", int(number(j, "lookback", 60, 20, 250, true))},
-         {"hedge_ratio", number(j, "hedge_ratio", 1, 1e-12, 100)},
+         {"hedge_ratio", number(j, "hedge_ratio", 1, -100, 100)},
          {"repeat", boolean(j, "repeat")}};
+  if (std::abs(c["hedge_ratio"].get<double>()) < 1e-12)
+    throw Error(422, "Hedge ratio must be nonzero.");
   double t = c["threshold"];
   if (c["ticker_a"] == c["ticker_b"])
     throw Error(422, "Choose two different stocks.");

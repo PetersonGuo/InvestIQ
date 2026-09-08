@@ -4,6 +4,7 @@ namespace sa {
 bool matches(double, const J &);
 J calculate_pair(const J &, const J &, const J &, const std::string &today = "");
 J analyze_pair(const J &);
+J discover_pairs(const J &);
 J pair_list();
 J pair_get(const std::string &);
 J pair_save(const J &, const std::string &id = "");
@@ -12,6 +13,7 @@ void pair_delete(const std::string &);
 J pair_events();
 void check_pair_alerts();
 J portfolio();
+void validate_execution_quote(const J &, const std::string &, double);
 J place_order(const J &);
 void check_price_alerts();
 } // namespace sa

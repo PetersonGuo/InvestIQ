@@ -15,13 +15,19 @@ int main(int argc, char **argv) {
   try {
     J input = J::parse(read(argv[1]));
     Callback callback = nullptr;
+    PortfolioCallback portfolio_callback = nullptr;
+    bool multi = input.contains("assets");
     if (input["language"] == "cpp") {
       module = dlopen(input["module_path"].get<std::string>().c_str(), RTLD_NOW | RTLD_LOCAL);
       if (!module)
         throw Error(422, dlerror());
-      callback = reinterpret_cast<Callback>(dlsym(module, "on_bar"));
-      if (!callback)
-        throw Error(422, "C++ strategy must export on_bar.");
+      if (multi)
+        portfolio_callback = reinterpret_cast<PortfolioCallback>(dlsym(module, "on_portfolio"));
+      else
+        callback = reinterpret_cast<Callback>(dlsym(module, "on_bar"));
+      if (!(multi ? bool(portfolio_callback) : bool(callback)))
+        throw Error(422, multi ? "Multi-stock C++ strategies must export on_portfolio."
+                               : "C++ strategy must export on_bar.");
     } else {
       auto adapter = fs::absolute(argv[0]).parent_path() / "stockassist-python-adapter.so";
       module = dlopen(adapter.c_str(), RTLD_NOW | RTLD_GLOBAL);
@@ -32,12 +38,25 @@ int main(int argc, char **argv) {
       close_python = reinterpret_cast<void (*)()>(dlsym(module, "sa_python_close"));
       if (!load || !close_python)
         throw Error(422, "Python adapter exports unavailable.");
-      callback = load(input["module_path"].get<std::string>().c_str(), input["bars"].dump().c_str(),
-                      input["params"].dump().c_str());
-      if (!callback)
+      if (multi) {
+        using MultiLoad = PortfolioCallback (*)(const char *, const char *, const char *);
+        auto multi_load = reinterpret_cast<MultiLoad>(dlsym(module, "sa_python_load_portfolio"));
+        if (!multi_load)
+          throw Error(422, "Portfolio Python adapter is unavailable.");
+        portfolio_callback =
+            multi_load(input["module_path"].get<std::string>().c_str(),
+                       input["assets"].dump().c_str(), input["params"].dump().c_str());
+      } else
+        callback = load(input["module_path"].get<std::string>().c_str(),
+                        input["bars"].dump().c_str(), input["params"].dump().c_str());
+      if (!(multi ? bool(portfolio_callback) : bool(callback)))
         throw Error(422, "Python strategy could not be loaded. See worker logs.");
     }
-    response = {{"result", simulate(input["bars"], callback, input["params"], input["settings"])}};
+    J result = multi ? simulate_portfolio(input["assets"], portfolio_callback, input["params"],
+                                          input["settings"])
+                     : simulate(input["bars"], callback, input["params"], input["settings"]);
+    add_comparison(result, input, input["settings"]);
+    response = {{"result", result}};
   } catch (const std::exception &e) {
     response = {{"error", e.what()}};
   }

@@ -45,7 +45,7 @@ Existing `POLYGON_API_KEY` is accepted as a fallback key only when Massive mode 
 
 Data is stored in `backend/data/demo.sqlite3`, `backend/data/ibkr.sqlite3`, or `backend/data/massive.sqlite3`, keeping provider accounts separate. Override `STOCKASSIST_DB` to choose another location. Back up the database while the API is stopped. No database reset happens on startup.
 
-Paper fills use the most recent available **daily closing price**, dated on the dashboard and each fill. No market orders are sent anywhere. Commissions, slippage, dividends, and corporate-action adjustments to positions are not modeled. Alerts also evaluate daily closes, not intraday crossings. Triggered alerts remain visible until deleted or rearmed; email/push delivery is not implemented.
+Paper execution uses live IBKR bid/ask quotes: buys pay the ask and sells receive the bid, with a modeled $0.005/share commission ($1 minimum). Market and limit orders are immediate-or-cancel: displayed size caps the fill and the remainder is cancelled. Delayed/frozen, disconnected, stale, or crossed quotes cannot fill. Live orders require regular US hours and a recent trade; short selling is not supported. This is local simulation, without broker routing, depth-based market impact, dividends, or corporate-action adjustments. Demo mode uses explicitly synthetic quotes. Alerts also evaluate daily closes, not intraday crossings. Triggered alerts remain visible until deleted or rearmed; email/push delivery is not implemented.
 
 ## Scope and architecture
 
@@ -63,7 +63,7 @@ After building, install Chromium once with `cd frontend && npx playwright instal
 
 ## Real IBKR data
 
-StockAssist can fetch real **completed daily and intraday bars** and search USD stock symbols through TWS or IB Gateway using the native IBKR C++ SDK. This is historical market data, not a streaming quote feed. The latest in-progress US session is excluded so alerts and paper fills continue to use completed daily closes.
+StockAssist can fetch real **completed daily and intraday bars** and search USD stock symbols through TWS or IB Gateway using the native IBKR C++ SDK. Historical requests return completed bars. Charts also subscribe to live quotes through the C++ backend and poll the latest quote once per second, updating sampled candles without resetting the viewport. Use **Follow live** to return to the newest bar. Live position marks and paper fills use quotes; alerts continue to evaluate completed daily closes. Live API market-data subscriptions are required in addition to historical-data access.
 
 1. Start TWS or IB Gateway and log in to your IBKR account.
 2. In TWS API settings, enable **ActiveX and Socket Clients**, allow the local connection, and leave **Read-Only API** enabled. The app makes no broker order requests.
@@ -90,7 +90,7 @@ References: [IBKR API setup](https://interactivebrokers.github.io/tws-api/initia
 
 Open [Research & backtest](http://127.0.0.1:3000/research) from the dashboard. Use IBKR gainers, losers, or volume scans with price/volume filters, or search a symbol directly. Paste/import Python or C++ strategy code, set dates, warmup, initial cash, fees, and slippage, then run. You can save strategy versions, revisit completed runs, and export the full result with code and input data.
 
-The Python/C++ examples use the same modular simulation engine. Signals execute at the next bar’s open; the report shows an equity curve against buy-and-hold, returns, drawdown, Sharpe, and individual fills. Current execution supports daily and intraday single-stock, long-only strategies. Strategy programs run locally in separate processes and must be trusted.
+The Python/C++ examples use the same modular simulation engine. Signals execute at the next bar’s open; the report shows an equity curve against buy-and-hold, returns, drawdown, Sharpe, and individual fills. Execution supports daily and intraday single-stock long-only strategies and multi-stock long/short portfolios. Strategy programs run locally in separate processes and must be trusted.
 
 See the [strategy authoring and engine guide](backend/simulation/README.md) for both language interfaces, execution assumptions, limits, and extension points. C++ requires a C++17 compiler; on macOS, install Xcode Command Line Tools if needed.
 
@@ -106,7 +106,7 @@ A one-shot alert pauses after its first trigger. Enable **Repeat after the condi
 
 The background worker checks about every 30 seconds while the backend is running. The page refreshes status/history every 10 seconds. There is no historical notification backfill after downtime. Alerts use completed daily closes, not intraday quotes. Both legs must share their latest date; missing dates are intersected, not forward-filled. Bars older than seven calendar days, mismatched latest dates, insufficient shared history, or a zero-variance spread do not trigger alerts and produce visible evaluation errors. A subsequent valid check clears the error.
 
-Pair alerts and notifications persist in the current mode's SQLite database. Edit, pause, rearm, or delete rules from the page. Deleting a rule retains its earlier notifications. Notifications are local/in-app only; email, push delivery, and brokerage pair execution are not enabled. Pair-alert controls are separate from the single-stock backtester and paper portfolio.
+Pair alerts and notifications persist in the current mode's SQLite database. Edit, pause, rearm, or delete rules from the page. Deleting a rule retains its earlier notifications. Notifications are local/in-app only; email, push delivery, and brokerage pair execution are not enabled. Pair-alert controls are separate from portfolio backtest execution and the local paper account.
 
 Z-score alerts measure deviation only. They do not test cointegration, fit an optimal hedge ratio, or establish that a pair is suitable to trade. For background on statistical pair construction, see [QuantConnect's pairs research guide](https://www.quantconnect.com/docs/v2/research-environment/applying-research/pca-and-pairs-trading).
 
@@ -121,3 +121,13 @@ Backtests now use a C++ event loop for both Python and C++ strategies. Repeated 
 Use **Candle interval** on the dashboard or **Backtest interval** in Research to select candles down to one second. Intraday pages load as you pan; the lab accepts UTC start/end times and runs the chosen interval through the C++ engine. Historical pages respect IBKR pacing and retention limits.
 
 Expand **Individual trades · IBKR Time & Sales** for separate trade records and JSON export. This is a historical snapshot with second-resolution timestamps, not a live subscription. Multiple trades in a second remain separate.
+
+### Company fundamentals and news
+
+The stock dashboard includes SEC-reported company fundamentals with per-metric reporting periods and links to source filings, plus recent company-related headlines from your IBKR API news providers. **Read article** opens a text preview; **Refresh company research** checks again. Changing the selected stock updates both panels. Annual financial results are distinguished from newer balance-sheet dates and are not labeled as live or TTM estimates. Optional Massive credentials add company profiles and valuation ratios. Missing provider access is shown explicitly, and demo data is labeled synthetic. See `backend/README.md` for SEC ticker-mapping coverage and provider configuration.
+
+### Portfolio backtesting and risk
+
+Research now accepts up to ten stocks in one C++-simulated portfolio, with signed long/short weights and Python or C++ strategy code. Load the cointegration-pair or equal-weight-basket starter to get started. Every new run includes SPY buy-and-hold as an S&P 500 price-return reference on the same aligned bars, alongside stock/basket buy-and-hold. The result chart and risk table compare drawdown, volatility, historical tail losses, beta, and gross/net exposure. Default short-borrow costs and execution assumptions are editable/documented in the research workspace.
+
+Pair discovery can filter on Engle–Granger cointegration evidence and find positive or inverse relationships. Previews show spread deviation, test statistics, fitted hedge, and half-life; signals identify both legs' directions. See `backend/simulation/README.md` for the portfolio callback contract, statistical definitions, and model limitations.

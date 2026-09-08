@@ -6,6 +6,7 @@
 #include "EReader.h"
 #include "EReaderOSSignal.h"
 #include "HistoricalTickLast.h"
+#include "NewsProvider.h"
 #include "ScannerSubscription.h"
 #include "bar.h"
 #include "market.hpp"
@@ -32,6 +33,48 @@ class Broker : public DefaultEWrapper {
   std::map<std::string, double> identical;
   double last_small = 0, last_search = 0, last_connect_failure = 0;
   std::string interval = "1d", before;
+  struct Live {
+    std::string symbol;
+    J data = J::object();
+    double touched = 0;
+    double started = now();
+  };
+  std::map<int, Live> live;
+  std::jthread pump;
+  J live_quote(const std::string &ticker) {
+    int req = -1;
+    for (auto &[key, subscription] : live)
+      if (subscription.symbol == ticker)
+        req = key;
+    if (req >= 0 && live.at(req).data.contains("error") && now() - live.at(req).started > 30) {
+      client.cancelMktData(req);
+      live.erase(req);
+      req = -1;
+    }
+    if (req < 0) {
+      if (live.size() >= 32)
+        throw Error(429, "Too many active live symbols. Try again shortly.");
+      auto contract = qualify(ticker);
+      req = ++serial;
+      live[req] = {
+          ticker, {{"ticker", ticker}, {"source", "ibkr"}, {"market_data_type", 0}}, now()};
+      client.reqMarketDataType(1);
+      client.reqMktData(req, contract, "233", false, false, TagValueListSPtr{});
+    }
+    live.at(req).touched = now();
+    double deadline = now() + 2;
+    while (now() < deadline && client.isConnected() && live.count(req) &&
+           !live.at(req).data.contains("ask") && !live.at(req).data.contains("error")) {
+      signal.waitForSignal();
+      reader->processMsgs();
+    }
+    if (!live.count(req))
+      throw Error(503, "Live subscription disconnected.");
+    auto result = live.at(req).data;
+    result["received_at"] = stamp();
+    result["connected"] = client.isConnected();
+    return result;
+  }
   void disconnect() {
     connected = false;
     client.eDisconnect();
@@ -40,6 +83,7 @@ class Broker : public DefaultEWrapper {
       reader.reset();
     }
     ready = false;
+    live.clear();
     contracts.clear();
     cache.clear();
   }
@@ -142,7 +186,30 @@ class Broker : public DefaultEWrapper {
   }
 
 public:
-  ~Broker() { disconnect(); }
+  Broker()
+      : pump([this](std::stop_token stop) {
+          while (!stop.stop_requested()) {
+            {
+              std::unique_lock lock(mutex, std::try_to_lock);
+              if (lock.owns_lock() && reader && client.isConnected()) {
+                reader->processMsgs();
+                for (auto it = live.begin(); it != live.end();) {
+                  if (now() - it->second.touched > 60) {
+                    client.cancelMktData(it->first);
+                    it = live.erase(it);
+                  } else
+                    ++it;
+                }
+              }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+          }
+        }) {}
+  ~Broker() {
+    pump.request_stop();
+    pump.join();
+    disconnect();
+  }
   J status() {
     std::unique_lock lock(mutex, std::try_to_lock);
     return {{"provider", "ibkr"},
@@ -162,11 +229,34 @@ public:
     std::lock_guard lock(mutex);
     try {
       connect();
+      if (op == "quote")
+        return live_quote(v.at("symbol"));
       std::string key = J::array({op, v, ny_date()}).dump();
       auto it = cache.find(key);
       if (it != cache.end() && now() - it->second.first < 60)
         return it->second.second;
-      if (op == "search") {
+      if (op == "news_article") {
+        int req = start();
+        client.reqNewsArticle(req, v.at("provider"), v.at("article"), TagValueListSPtr{});
+        wait();
+      } else if (op == "news") {
+        auto contract = qualify(v.at("symbol"));
+        start();
+        client.reqNewsProviders();
+        wait();
+        std::string providers;
+        for (auto &provider : values) {
+          if (!providers.empty())
+            providers += "+";
+          providers += provider["code"].get<std::string>();
+        }
+        if (providers.empty())
+          throw Error(503,
+                      "No API news providers are enabled in TWS. Check API News Configuration.");
+        int req = start();
+        client.reqHistoricalNews(req, contract.conId, providers, "", "", 20, TagValueListSPtr{});
+        wait();
+      } else if (op == "search") {
         double delay = std::max(0.0, 1.1 - (now() - last_search));
         std::this_thread::sleep_for(std::chrono::duration<double>(delay));
         last_search = now();
@@ -228,6 +318,123 @@ public:
       throw;
     }
   }
+  void marketDataType(TickerId req, int type) override {
+    if (live.count(req))
+      live.at(req).data["market_data_type"] = type;
+  }
+  void tickPrice(TickerId req, TickType field, double price, const TickAttrib &) override {
+    if (!live.count(req))
+      return;
+    const char *key = field == 1 ? "bid" : field == 2 ? "ask" : field == 4 ? "last" : nullptr;
+    if (!key)
+      return;
+    auto &data = live.at(req).data;
+    if (!std::isfinite(price) || price <= 0) {
+      data.erase(key);
+      return;
+    }
+    data[key] = price;
+    data[std::string(key) + "_received_at"] = stamp();
+  }
+  void tickSize(TickerId req, TickType field, Decimal size) override {
+    if (!live.count(req))
+      return;
+    const char *key = field == 0 ? "bid_size" : field == 3 ? "ask_size" : nullptr;
+    double amount = DecimalFunctions::decimalToDouble(size);
+    if (key && std::isfinite(amount))
+      live.at(req).data[key] = std::max(0.0, amount);
+  }
+  void tickString(TickerId req, TickType field, const std::string &value) override {
+    if (!live.count(req))
+      return;
+    try {
+      auto &data = live.at(req).data;
+      if (field == 45)
+        data["last_time"] = stamp(std::stod(value));
+      if (field == 48) {
+        std::istringstream stream(value);
+        std::string price, size, time;
+        std::getline(stream, price, ';');
+        std::getline(stream, size, ';');
+        std::getline(stream, time, ';');
+        double p = std::stod(price), t = std::stod(time) / 1000;
+        if (std::isfinite(p) && p > 0 && std::isfinite(t)) {
+          data["last"] = p;
+          data["last_time"] = stamp(t);
+          data["last_received_at"] = stamp();
+        }
+      }
+    } catch (...) {
+    }
+  }
+  void newsProviders(const std::vector<NewsProvider> &providers) override {
+    values = J::array();
+    for (auto &p : providers)
+      values.push_back({{"code", p.providerCode}, {"name", p.providerName}});
+    done = true;
+  }
+  void historicalNews(int req, const std::string &time, const std::string &provider,
+                      const std::string &article, const std::string &headline) override {
+    if (req != current)
+      return;
+    std::string title = headline;
+    if (title.starts_with("{")) {
+      auto end = title.find('}');
+      if (end != std::string::npos && end < 200)
+        title.erase(0, end + 1);
+    }
+    std::string published = time;
+    if (published.size() >= 19 && published[10] == ' ') {
+      published[10] = 'T';
+      published += "Z";
+    }
+    values.push_back({{"id", provider + ":" + article},
+                      {"title", title},
+                      {"published_at", published},
+                      {"publisher", provider},
+                      {"provider", provider},
+                      {"article_id", article},
+                      {"url", nullptr}});
+  }
+  void newsArticle(int req, int type, const std::string &article) override {
+    if (req != current)
+      return;
+    if (type != 0) {
+      error_message = "This article is a PDF. Open it in TWS.";
+      done = true;
+      return;
+    }
+    std::string plain;
+    bool tag = false;
+    for (char c : article.substr(0, 128 * 1024)) {
+      if (c == '<') {
+        tag = true;
+        plain += ' ';
+      } else if (c == '>')
+        tag = false;
+      else if (!tag)
+        plain += c;
+    }
+    for (const auto &[entity, replacement] : std::map<std::string, std::string>{{"&amp;", "&"},
+                                                                                {"&lt;", "<"},
+                                                                                {"&gt;", ">"},
+                                                                                {"&quot;", "\""},
+                                                                                {"&#39;", "'"},
+                                                                                {"&nbsp;", " "}}) {
+      size_t pos = 0;
+      while ((pos = plain.find(entity, pos)) != std::string::npos) {
+        plain.replace(pos, entity.size(), replacement);
+        pos += replacement.size();
+      }
+    }
+    values = {{"text", plain}, {"source", "ibkr"}};
+    done = true;
+  }
+
+  void historicalNewsEnd(int req, bool) override {
+    if (req == current)
+      done = true;
+  }
   void nextValidId(OrderId) override { ready = true; }
   void connectionClosed() override {
     connected = false;
@@ -237,6 +444,10 @@ public:
     if (code == 2104 || code == 2106 || code == 2158 || code == 2108 || code == 2176 ||
         code == 2107)
       return;
+    if (live.count(req)) {
+      live.at(req).data["error"] = "IBKR market data error " + std::to_string(code) + ": " + msg;
+      return;
+    }
     if (req == current || code == 326 || code == 502 || code == 504) {
       error_message = "IBKR rejected the data request (code " + std::to_string(code) + "). " + msg +
                       " Check market-data subscriptions/API permissions and "

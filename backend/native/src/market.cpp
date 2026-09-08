@@ -63,6 +63,7 @@ std::string escape(const std::string &s) {
   return out;
 }
 } // namespace
+J massive_data(const std::string &path) { return provider_get(path); }
 J history(const std::string &s, int days, const std::string &before, const std::string &interval) {
   auto r = resolution(interval);
   J bars = J::array();
@@ -230,5 +231,25 @@ J ticks(const std::string &s, const std::string &before) {
   return {{"ticker", s},          {"source", "ibkr"},
           {"ticks", rows},        {"timestamp_resolution", "1 second"},
           {"session", "regular"}, {"as_of", rows.empty() ? J(nullptr) : rows.back()["time"]}};
+}
+J quote(const std::string &ticker) {
+  if (config.mode == "ibkr")
+    return ib_request("quote", {{"symbol", ticker}});
+  if (config.mode != "demo")
+    throw Error(422, "Live quotes currently require IBKR mode.");
+  double price = history(ticker, 2)["price"];
+  return {{"ticker", ticker},
+          {"source", "demo"},
+          {"market_data_type", 1},
+          {"bid", price - .01},
+          {"ask", price + .01},
+          {"last", price},
+          {"bid_size", 100},
+          {"ask_size", 100},
+          {"last_time", stamp()},
+          {"bid_received_at", stamp()},
+          {"ask_received_at", stamp()},
+          {"received_at", stamp()},
+          {"connected", true}};
 }
 } // namespace sa

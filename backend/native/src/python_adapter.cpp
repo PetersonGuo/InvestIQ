@@ -32,7 +32,7 @@ double python_on_bar(const SA_Bar *bars, int count, double cash, int64_t shares,
   return value;
 }
 } // namespace
-extern "C" Callback sa_python_load(const char *source, const char *bars, const char *params) {
+bool load_python(const char *source, const char *bars, const char *params, const char *loader) {
   PyConfig config;
   PyConfig_InitPythonConfig(&config);
   config.use_environment = 0;
@@ -41,26 +41,71 @@ extern "C" Callback sa_python_load(const char *source, const char *bars, const c
   auto status = Py_InitializeFromConfig(&config);
   PyConfig_Clear(&config);
   if (PyStatus_Exception(status))
-    return nullptr;
+    return false;
   std::ifstream file(std::string(SA_BACKEND_ROOT) + "/simulation/python_strategy.py");
   std::string code{std::istreambuf_iterator<char>(file), {}};
   if (code.empty())
-    return nullptr;
+    return false;
   globals = PyDict_New();
   PyDict_SetItemString(globals, "__builtins__", PyEval_GetBuiltins());
   PyObject *result = PyRun_String(code.c_str(), Py_file_input, globals, globals);
   if (!result) {
     PyErr_Print();
-    return nullptr;
+    return false;
   }
   Py_DECREF(result);
   callback =
-      PyObject_CallFunction(PyDict_GetItemString(globals, "load"), "sss", source, bars, params);
+      PyObject_CallFunction(PyDict_GetItemString(globals, loader), "sss", source, bars, params);
   if (!callback) {
     PyErr_Print();
-    return nullptr;
+    return false;
   }
-  return python_on_bar;
+  return true;
+}
+extern "C" Callback sa_python_load(const char *source, const char *bars, const char *params) {
+  return load_python(source, bars, params, "load") ? python_on_bar : nullptr;
+}
+using PortfolioCallback = int (*)(const SA_Asset *, int, int, double, double, const char *,
+                                  double *);
+int python_on_portfolio(const SA_Asset *assets, int n, int count, double cash, double equity,
+                        const char *, double *weights) {
+  PyObject *positions = PyTuple_New(n);
+  for (int a = 0; a < n; ++a)
+    PyTuple_SET_ITEM(positions, a, PyLong_FromLongLong(assets[a].shares));
+  PyObject *result = PyObject_CallFunction(callback, "iddO", count, cash, equity, positions);
+  Py_DECREF(positions);
+  if (!result) {
+    PyErr_Print();
+    return -1;
+  }
+  if (result == Py_None) {
+    Py_DECREF(result);
+    return 0;
+  }
+  if (!PyList_Check(result) || PyList_Size(result) != n) {
+    Py_DECREF(result);
+    return -1;
+  }
+  bool valid = true;
+  for (int a = 0; a < n; ++a) {
+    auto value = PyList_GetItem(result, a);
+    if (PyBool_Check(value) || (!PyFloat_Check(value) && !PyLong_Check(value))) {
+      valid = false;
+      break;
+    }
+    weights[a] = PyFloat_AsDouble(value);
+    if (PyErr_Occurred() || !std::isfinite(weights[a])) {
+      PyErr_Clear();
+      valid = false;
+      break;
+    }
+  }
+  Py_DECREF(result);
+  return valid ? 1 : -1;
+}
+extern "C" PortfolioCallback sa_python_load_portfolio(const char *source, const char *assets,
+                                                      const char *params) {
+  return load_python(source, assets, params, "load_portfolio") ? python_on_portfolio : nullptr;
 }
 extern "C" void sa_python_close() {
   if (Py_IsInitialized()) {

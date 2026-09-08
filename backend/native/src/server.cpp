@@ -79,7 +79,8 @@ int main(int argc, char **argv) {
         std::rethrow_exception(e);
       } catch (const Error &ex) {
         json(r, {{"detail", ex.what()}}, ex.status);
-      } catch (const nlohmann::json::exception &) {
+      } catch (const nlohmann::json::exception &ex) {
+        std::cerr << "JSON error: " << ex.what() << '\n';
         json(r, {{"detail", "Invalid JSON or field type."}}, 422);
       } catch (const std::exception &ex) {
         std::cerr << "Backend error: " << ex.what() << '\n';
@@ -147,6 +148,22 @@ int main(int argc, char **argv) {
       auto j = object(q);
       json(r, search(text(j, "ticker", "", 100), number(j, "limit", 20, 1, 100, true)));
     });
+    server.Get("/api/news/article", [](const auto &q, auto &r) {
+      if (config.mode != "ibkr")
+        throw Error(422, "Article previews require IBKR mode.");
+      J fields = {{"provider", q.get_param_value("provider")},
+                  {"article", q.get_param_value("article")}};
+      auto provider = text(fields, "provider", "", 80), article = text(fields, "article", "", 256);
+      if (provider.empty() || article.empty())
+        throw Error(422, "Provider and article ID are required.");
+      json(r, ib_request("news_article", {{"provider", provider}, {"article", article}}));
+    });
+    server.Get(R"(/api/stocks/([^/]+)/fundamentals)",
+               [](const auto &q, auto &r) { json(r, fundamentals(symbol(q.matches[1]))); });
+    server.Get(R"(/api/stocks/([^/]+)/news)",
+               [](const auto &q, auto &r) { json(r, company_news(symbol(q.matches[1]))); });
+    server.Get(R"(/api/stocks/([^/]+)/quote)",
+               [](const auto &q, auto &r) { json(r, quote(symbol(q.matches[1]))); });
     server.Get(R"(/api/stocks/([^/]+))", [](const auto &q, auto &r) {
       auto interval = query(q, "interval", "1d"), before = query(q, "before");
       resolution(interval);
@@ -188,10 +205,14 @@ int main(int argc, char **argv) {
     server.Get("/api/strategies/examples", [](const auto &, auto &r) { json(r, examples()); });
     server.Get("/api/strategies", [](const auto &, auto &r) {
       Db d;
-      auto rows = d.rows("SELECT * FROM strategies ORDER BY updated_at DESC");
+      auto rows = d.rows("SELECT s.*,c.tickers_json FROM strategies s LEFT JOIN strategy_context c "
+                         "ON c.id=s.id ORDER BY s.updated_at DESC");
       for (auto &row : rows) {
         row["params"] = J::parse(row["params_json"].get<std::string>());
         row.erase("params_json");
+        if (!row["tickers_json"].is_null())
+          row["tickers"] = J::parse(row["tickers_json"].get<std::string>());
+        row.erase("tickers_json");
       }
       json(r, rows);
     });
@@ -199,8 +220,12 @@ int main(int argc, char **argv) {
       auto j = validate_strategy(object(q));
       Db d;
       j["id"] = id();
+      d.exec("BEGIN IMMEDIATE");
       d.exec("INSERT INTO strategies VALUES(?,?,?,?,?,?)",
              {j["id"], j["name"], j["language"], j["code"], j["params"].dump(), stamp()});
+      if (j.contains("tickers"))
+        d.exec("INSERT INTO strategy_context VALUES(?,?)", {j["id"], j["tickers"].dump()});
+      d.exec("COMMIT");
       json(r, j, 201);
     });
     server.Post("/api/scanner", [](const auto &q, auto &r) { json(r, scan(object(q))); });
@@ -210,6 +235,8 @@ int main(int argc, char **argv) {
     server.Post("/api/backtests", [](const auto &q, auto &r) {
       json(r, backtest_submit(validate_backtest(object(q))), 202);
     });
+    server.Post("/api/pairs/discover",
+                [](const auto &q, auto &r) { json(r, discover_pairs(object(q))); });
     server.Post("/api/pairs/preview",
                 [](const auto &q, auto &r) { json(r, analyze_pair(validate_pair(object(q)))); });
     server.Get("/api/pairs/alerts", [](const auto &, auto &r) { json(r, pair_list()); });
