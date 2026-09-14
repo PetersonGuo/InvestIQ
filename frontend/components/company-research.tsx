@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState, useRef } from "react";
+import ArticleBody from "@/components/article-body";
 import { api } from "@/lib/stockassist";
 type Metric = {
 	label: string;
@@ -54,6 +55,7 @@ export default function CompanyResearch({ symbol }: { symbol: string }) {
 	const [article, setArticle] = useState<{
 		title: string;
 		text: string;
+    html?: string | null;
 	} | null>(null);
 	const [revision, setRevision] = useState(0);
 	useEffect(() => {
@@ -112,9 +114,7 @@ export default function CompanyResearch({ symbol }: { symbol: string }) {
 				<>
 					<p className="text-xs text-slate-400">
 						{fundamentals.name || symbol} ·{" "}
-						{fundamentals.source === "demo"
-							? "SYNTHETIC DEMO FUNDAMENTALS"
-							: "Reported financials · SEC EDGAR"}
+						{"Reported financials · SEC EDGAR"}
 					</p>
 					{fundamentals.description && (
 						<p className="text-sm text-slate-300">
@@ -218,9 +218,7 @@ export default function CompanyResearch({ symbol }: { symbol: string }) {
 				) : (
 					<>
 						<p className="mb-3 text-xs text-slate-400">
-							{news.source === "demo"
-								? "SYNTHETIC DEMO NEWS"
-								: news.source.toUpperCase()}{" "}
+							{news.source.toUpperCase()}{" "}
 							· Checked{" "}
 							{new Date(news.fetched_at).toLocaleTimeString()}
 						</p>
@@ -243,7 +241,9 @@ export default function CompanyResearch({ symbol }: { symbol: string }) {
 											>
 												{article.title} ↗
 											</a>
-										) : (
+										) : article.provider && article.article_id ? (
+                      <a className="text-emerald-300 hover:underline" href={`/news/article?${new URLSearchParams({provider: article.provider, article: article.article_id, title: article.title, publisher: article.publisher}).toString()}`}>{article.title} ↗</a>
+                    ) : (
 											article.title
 										)}
 									</p>
@@ -270,6 +270,7 @@ export default function CompanyResearch({ symbol }: { symbol: string }) {
 												try {
 													const result = await api<{
 														text: string;
+    html?: string | null;
 													}>(
 														`news/article?provider=${encodeURIComponent(article.provider!)}&article=${encodeURIComponent(article.article_id!)}`,
 														{
@@ -283,6 +284,7 @@ export default function CompanyResearch({ symbol }: { symbol: string }) {
 														setArticle({
 															title: article.title,
 															text: result.text,
+                            html: result.html,
 														});
 												} catch (e) {
 													if (
@@ -333,9 +335,7 @@ export default function CompanyResearch({ symbol }: { symbol: string }) {
 							Close article
 						</button>
 					</div>
-					<p className="mt-3 whitespace-pre-wrap text-sm text-slate-300">
-						{article.text}
-					</p>
+					<ArticleBody text={article.text} html={article.html} />
 				</div>
 			)}
 		</section>

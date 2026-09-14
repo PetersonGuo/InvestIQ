@@ -14,9 +14,10 @@ export default defineConfig({
   webServer: [
     {
       command:
-        "../backend/build/native/stockassist-server --port 8100",
+        "cmake --build ../backend/build/native --target stockassist-test-server -j 4 && ../backend/build/native/stockassist-test-server --port 8100",
       url: "http://127.0.0.1:8100/health",
-      env: { STOCKASSIST_DATA_MODE: "demo", STOCKASSIST_DB: database },
+      timeout: 180000,
+      env: { STOCKASSIST_DATA_MODE: "ibkr", STOCKASSIST_TEST_DATA: "1", IBKR_PORT: "1", STOCKASSIST_DB: database },
       reuseExistingServer: false,
     },
     {

@@ -1,5 +1,6 @@
 #include "pairs.hpp"
 #include "../../simulation/pair_math.h"
+#include "relative_value.hpp"
 #include <numeric>
 #include <set>
 namespace sa {
@@ -161,6 +162,8 @@ J calculate_pair(const J &c, const J &a_rows, const J &b_rows, const std::string
           {"points", points}};
 }
 J analyze_pair(const J &c) {
+  if (c.contains("relative_value"))
+    return analyze_relative_value(c);
   auto a = history(c["ticker_a"], 500), b = history(c["ticker_b"], 500);
   if (a["source"] != b["source"])
     throw Error(409, "Both legs must use the same market-data source.");
@@ -179,7 +182,7 @@ J discover_pairs(const J &request) {
   bool require_cointegration = boolean(request, "require_cointegration", false);
   double threshold = number(request, "threshold", 2, .1, 20);
   std::map<std::string, J> histories;
-  J errors = J::array(), results = J::array();
+  J errors = J::array(), results = J::array(), skipped = J::array();
   std::set<std::string> symbols;
   for (const auto &ticker : request["tickers"]) {
     if (!ticker.is_string())
@@ -230,8 +233,13 @@ J discover_pairs(const J &request) {
         double correlation = std::clamp(covariance / (lookback * sx * sy), -1.0, 1.0);
         if ((relationship == "positive" && correlation < minimum) ||
             (relationship == "negative" && correlation > -minimum) ||
-            (relationship == "either" && std::abs(correlation) < minimum))
+            (relationship == "either" && std::abs(correlation) < minimum)) {
+          skipped.push_back({{"ticker", a->first + "/" + b->first},
+                             {"reason", "Daily return correlation " + std::to_string(correlation) +
+                                            " does not pass the " + relationship + " filter at " +
+                                            std::to_string(minimum) + "."}});
           continue;
+        }
         auto [px, dx] = stats(x, start, x.size() - 1);
         auto [py, dy] = stats(y, start, y.size() - 1);
         if (dy <= 1e-12)
@@ -263,6 +271,7 @@ J discover_pairs(const J &request) {
     return std::abs(a["correlation"].get<double>()) > std::abs(b["correlation"].get<double>());
   });
   return {{"pairs", results},
+          {"skipped", skipped},
           {"errors", errors},
           {"lookback", lookback},
           {"correlation_method", "Pearson correlation of aligned daily log returns"}};
@@ -398,7 +407,12 @@ J portfolio() {
 void validate_execution_quote(const J &quote, const std::string &side, double at) {
   auto t = ny_time(at);
   int minute = t.tm_hour * 60 + t.tm_min;
-  if (config.mode != "demo" && (t.tm_wday == 0 || t.tm_wday == 6 || minute < 570 || minute >= 960))
+#ifdef STOCKASSIST_TEST_FIXTURES
+  const bool test_quote = quote.value("source", "") == "fixture";
+#else
+  constexpr bool test_quote = false;
+#endif
+  if (!test_quote && (t.tm_wday == 0 || t.tm_wday == 6 || minute < 570 || minute >= 960))
     throw Error(
         409,
         "Paper execution is available during regular US trading hours (09:30–16:00 New York).");
@@ -520,24 +534,47 @@ J place_order(const J &q) {
 }
 void check_price_alerts() {
   Db d;
-  auto rows = d.rows("SELECT * FROM alerts WHERE active=1");
-  std::map<std::string, double> prices;
+  d.exec("INSERT OR IGNORE INTO price_alert_state(alert_id,last_matched) SELECT id,CASE WHEN "
+         "triggered_at IS NULL THEN 0 ELSE 1 END FROM alerts");
+  auto rows = d.rows("SELECT a.*,s.version FROM alerts a JOIN price_alert_state s ON "
+                     "a.id=s.alert_id WHERE a.active=1");
+  std::map<std::string, J> quotes;
   for (auto &a : rows) {
-    auto s = a["ticker"].get<std::string>();
-    if (!prices.count(s)) {
+    auto ticker = a["ticker"].get<std::string>();
+    if (!quotes.count(ticker)) {
       try {
-        prices[s] = history(s, 2)["price"];
+        quotes[ticker] = history(ticker, 2);
       } catch (...) {
-        prices[s] = NAN;
+        quotes[ticker] = nullptr;
       }
     }
-    double p = prices[s];
-    if (!std::isfinite(p))
+    auto &quote = quotes[ticker];
+    if (quote.is_null())
       continue;
-    if (a["direction"] == "above" ? p >= a["threshold"].get<double>()
-                                  : p <= a["threshold"].get<double>())
-      d.exec("UPDATE alerts SET active=0,triggered_at=? WHERE id=? AND active=1",
-             {stamp(), a["id"]});
+    double price = quote["price"];
+    if (!std::isfinite(price))
+      continue;
+    std::string as_of = quote["as_of"];
+    bool matched = a["direction"] == "above" ? price >= a["threshold"].get<double>()
+                                             : price <= a["threshold"].get<double>();
+    d.exec("BEGIN IMMEDIATE");
+    auto current = d.rows("SELECT s.* FROM price_alert_state s JOIN alerts a ON a.id=s.alert_id "
+                          "WHERE a.id=? AND a.active=1 AND s.version=?",
+                          {a["id"], a["version"]});
+    if (current.empty() || (!current[0]["last_as_of"].is_null() &&
+                            as_of <= current[0]["last_as_of"].get<std::string>())) {
+      d.exec("COMMIT");
+      continue;
+    }
+    if (matched && current[0]["last_matched"] == 0) {
+      auto time = stamp();
+      d.exec("INSERT INTO price_events VALUES(?,?,?,?,?,?,?,?)",
+             {id(), a["id"], ticker, a["direction"], a["threshold"], price, as_of, time});
+      d.exec("UPDATE alerts SET triggered_at=? WHERE id=?", {time, a["id"]});
+    }
+    d.exec("UPDATE price_alert_state SET last_matched=?,last_as_of=? WHERE alert_id=?",
+           {matched ? 1 : 0, as_of, a["id"]});
+    d.exec("COMMIT");
   }
 }
 } // namespace sa

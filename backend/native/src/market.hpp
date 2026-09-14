@@ -7,6 +7,7 @@ void ib_close();
 J history(const std::string &symbol, int days = 90, const std::string &before = "",
           const std::string &interval = "1d");
 J quote(const std::string &symbol);
+J company_profile(const std::string &);
 J fundamentals(const std::string &);
 J company_news(const std::string &);
 J parse_company_facts(const J &);

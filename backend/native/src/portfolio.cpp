@@ -4,8 +4,8 @@ namespace sa {
 J simulate_portfolio(const J &assets, PortfolioCallback callback, const J &params,
                      const J &settings) {
   const int n = assets.size(), warmup = settings.value("warmup", 0);
-  if (n < 2 || n > 10)
-    throw Error(422, "Portfolio strategies require 2–10 stocks.");
+  if (n < 2 || n > 32)
+    throw Error(422, "Portfolio strategies require 2–32 stocks.");
   const int count = assets[0].at("bars").size();
   if (count < warmup + 2)
     throw Error(422, "Not enough aligned bars after warmup.");
@@ -44,11 +44,16 @@ J simulate_portfolio(const J &assets, PortfolioCallback callback, const J &param
     }
     views[a] = {symbols[a].c_str(), bars[a].data(), 0};
   }
-  double cash = initial, peak = initial, total_fees = 0, total_borrow = 0;
+  double cash = initial, peak = initial, total_fees = 0, total_borrow = 0, total_slippage = 0;
   bool pending = false;
   int closes = 0, wins = 0;
   J curve = J::array(), fills = J::array();
-  std::string parameters = params.dump();
+  J effective = params;
+  effective["_sa_commission"] = fee;
+  effective["_sa_slippage_bps"] = slip * 10000;
+  effective["_sa_borrow_rate_percent"] = borrow * 100;
+  effective["_sa_max_gross_exposure"] = max_gross;
+  std::string parameters = effective.dump();
   for (int i = warmup; i < count; ++i) {
     if (i > warmup) {
       double short_value = 0;
@@ -92,6 +97,7 @@ J simulate_portfolio(const J &assets, PortfolioCallback callback, const J &param
           averages[a] = 0;
         cash -= delta * price + fee;
         total_fees += fee;
+        total_slippage += std::abs(delta) * bars[a][i].open * slip;
         positions[a] = desired;
         if (closed) {
           ++closes;
@@ -159,6 +165,7 @@ J simulate_portfolio(const J &assets, PortfolioCallback callback, const J &param
             {"win_rate_percent", closes ? J(100.0 * wins / closes) : J(nullptr)},
             {"total_commission", total_fees},
             {"total_borrow_cost", total_borrow},
+            {"total_slippage_cost", total_slippage},
             {"open_shares", 0}}},
           {"open_positions", curve.back()["positions"]}};
 }

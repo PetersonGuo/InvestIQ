@@ -33,7 +33,7 @@ class Client:
 def launch(tmp_path):
     processes = []
 
-    def start(mode="demo", database=None, **extra):
+    def start(mode=None, database=None, production=False, **extra):
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]
@@ -41,12 +41,14 @@ def launch(tmp_path):
         log = open(tmp_path / f"{port}.log", "w")
         environment = {
             **os.environ,
-            "STOCKASSIST_DATA_MODE": mode,
+            "STOCKASSIST_DATA_MODE": mode or "ibkr",
+            "STOCKASSIST_TEST_DATA": "1" if mode is None else "0",
             "STOCKASSIST_DB": str(db),
+            "IBKR_PORT": "1",
             **extra,
         }
         process = subprocess.Popen(
-            [str(ROOT / "build/native/stockassist-server"), "--port", str(port)],
+            [str(ROOT / "build/native" / ("stockassist-server" if production else "stockassist-test-server")), "--port", str(port)],
             env=environment,
             stdout=log,
             stderr=log,

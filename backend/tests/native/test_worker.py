@@ -113,7 +113,7 @@ def test_randomized_reference_parity(tmp_path, warmup, fee):
         (
             "cpp",
             '#include "strategy_api.h"\nextern "C" double on_bar(const SA_Bar*,int,double,int64_t,const char*) { volatile int x=0; while(true) { x=1; } }',
-            "exited",
+            ("exited", "exceeded its time limit"),
         ),
     ],
 )
@@ -122,5 +122,5 @@ def test_failures_are_contained(client, language, code, detail):
     submitted = client.post("/api/backtests", json=q).json()
     run = wait_run(client, submitted["id"])
     assert run["status"] == "failed"
-    assert detail in run["error"]
+    assert any(message in run["error"] for message in (detail if isinstance(detail, tuple) else (detail,)))
     assert client.get("/health").json()["backend"] == "cpp"

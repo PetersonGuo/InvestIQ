@@ -59,7 +59,7 @@ async function proxy(
 				path[0] === "stocks" &&
 					["news", "fundamentals"].includes(path[2])
 					? 45000
-					: path[0] === "pairs" && path[1] === "discover"
+					: path[0] === "pairs" && ["discover", "preview", "alerts", "valuation"].includes(path[1])
 						? 400000
 						: path[0] === "pairs"
 							? 40000

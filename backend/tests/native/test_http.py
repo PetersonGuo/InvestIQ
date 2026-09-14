@@ -125,13 +125,31 @@ def test_price_alert_persistence_and_trigger_on_startup(launch):
     alert = response.json()
     process.terminate()
     process.wait(timeout=20)
-    client, _, _ = launch(database=db)
+    client, process, _ = launch(database=db)
     for _ in range(100):
         row = client.get("/api/alerts").json()[0]
-        if not row["active"]:
+        if row["triggered_at"]:
             break
         time.sleep(0.02)
-    assert row["active"] == 0 and row["triggered_at"]
+    assert row["active"] == 1 and row["triggered_at"]
+    events = client.get("/api/alerts/events").json()
+    assert len(events) == 1 and events[0]["alert_id"] == alert["id"]
+    process.terminate()
+    process.wait(timeout=20)
+    client, process, _ = launch(database=db)
+    assert client.get("/api/alerts/events").json() == events
+    assert client.get("/api/alerts").json()[0]["active"] == 1
+    # Resume preserves the crossing latch, including across process restarts.
+    assert client.post("/api/alerts/" + alert["id"] + "/state", json={"active": False}).json()["active"] == 0
+    process.terminate()
+    process.wait(timeout=20)
+    client, process, _ = launch(database=db)
+    assert client.get("/api/alerts").json()[0]["active"] == 0
+    assert client.post("/api/alerts/" + alert["id"] + "/state", json={"active": True}).json()["active"] == 1
+    process.terminate()
+    process.wait(timeout=20)
+    client, _, _ = launch(database=db)
+    assert client.get("/api/alerts/events").json() == events
     assert (
         client.put(
             "/api/alerts/" + alert["id"],
@@ -141,6 +159,7 @@ def test_price_alert_persistence_and_trigger_on_startup(launch):
     )
     assert client.delete("/api/alerts/" + alert["id"]).status_code == 204
     assert client.delete("/api/alerts/" + alert["id"]).status_code == 404
+    assert client.get("/api/alerts/events").json() == events
 
 
 def pair_config(**updates):
@@ -285,3 +304,36 @@ def test_unavailable_broker_does_not_fall_back_to_demo(launch):
     r = client.get("/api/stocks/AAPL")
     assert r.status_code in (502, 503, 504)
     assert "IBKR" in r.json()["detail"]
+
+
+def test_price_alert_repeats_only_after_condition_clears(launch):
+    client, process, db = launch()
+    alert = client.post('/api/alerts', json={'ticker': 'AAPL', 'direction': 'above', 'threshold': 1}).json()
+
+    def restart_with_previous_close(threshold):
+        nonlocal client, process
+        process.terminate()
+        process.wait(timeout=20)
+        # Move the stored observation back to exercise a fresh daily observation.
+        # Change the trigger level to deterministically exercise both sides of the condition.
+        with sqlite3.connect(db) as connection:
+            connection.execute('UPDATE alerts SET threshold=? WHERE id=?', (threshold, alert['id']))
+            connection.execute("UPDATE price_alert_state SET last_as_of='2000-01-01' WHERE alert_id=?", (alert['id'],))
+        client, process, _ = launch(database=db)
+        for _ in range(100):
+            with sqlite3.connect(db) as connection:
+                state = connection.execute('SELECT last_as_of,last_matched FROM price_alert_state WHERE alert_id=?', (alert['id'],)).fetchone()
+            if state[0] and state[0] != '2000-01-01':
+                return state[1]
+            time.sleep(0.02)
+        pytest.fail('Price alert worker did not process fresh observation')
+
+    assert restart_with_previous_close(1) == 1
+    assert len(client.get('/api/alerts/events').json()) == 1
+    assert restart_with_previous_close(1) == 1
+    assert len(client.get('/api/alerts/events').json()) == 1
+    assert restart_with_previous_close(10000) == 0
+    assert len(client.get('/api/alerts/events').json()) == 1
+    assert restart_with_previous_close(1) == 1
+    assert len(client.get('/api/alerts/events').json()) == 2
+    assert client.get('/api/alerts').json()[0]['active'] == 1

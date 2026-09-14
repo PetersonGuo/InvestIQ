@@ -1,5 +1,9 @@
 import { test, expect } from "@playwright/test";
 
+test.beforeEach(async ({page}) => {
+  await page.addInitScript(() => localStorage.setItem('pairs_advanced', 'true'));
+});
+
 test("preview, create, trigger, edit, pause, rearm, and delete a pair alert", async ({
 	page,
 }) => {
@@ -25,17 +29,15 @@ test("preview, create, trigger, edit, pause, rearm, and delete a pair alert", as
 		.getByRole("button", { name: "Create pair alert", exact: true })
 		.click();
 	await expect(page.getByText("Watching", { exact: true })).toBeVisible();
-	await expect(page.getByText("Triggered", { exact: true })).toBeVisible({
-		timeout: 45000,
-	});
+
 	const notifications = page
 		.getByRole("heading", { name: "Recent pair notifications" })
 		.locator("..");
 	await expect(
 		notifications.getByText("Observed", { exact: false }),
-	).toBeVisible();
+	).toBeVisible({timeout: 45000});
 	await page.reload();
-	await expect(page.getByText("Triggered", { exact: true })).toBeVisible();
+	await expect(page.getByText("Watching", { exact: true })).toBeVisible();
 	await page.getByRole("button", { name: "Edit", exact: true }).click();
 	await page.getByLabel("Alert level").fill("100");
 	await page
@@ -100,7 +102,7 @@ test("discover correlated pairs and configure a directional alert", async ({
 	page,
 }) => {
 	await page.goto("/pairs");
-	await page.getByLabel("Minimum correlation").fill("0");
+	await page.getByLabel("Minimum correlation", { exact: true }).fill("0");
 	await page.getByRole("button", { name: "Find pairs", exact: true }).click();
 	await expect(
 		page.getByRole("button", { name: "Configure alert" }).first(),

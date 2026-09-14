@@ -1,7 +1,12 @@
 #include "pair_math.h"
 #include "pairs.hpp"
+#include "relative_value_math.h"
 #include "simulation.hpp"
 #include <iostream>
+#include <random>
+#define on_portfolio rv_cost_callback
+#include "../../simulation/examples/relative_value.cpp"
+#undef on_portfolio
 using namespace sa;
 void require(bool value, const char *message) {
   if (!value)
@@ -52,7 +57,7 @@ int main() {
     load_config();
     TempDir temp;
     config.db = temp.path / "unit.sqlite3";
-    config.mode = "demo";
+    config.mode = "ibkr";
     initialize();
     J settings = {{"initial_cash", 100},
                   {"commission", 0},
@@ -242,6 +247,108 @@ int main() {
               "Engle–Granger statistic matches independent matrix regression");
       require(std::abs(fit.critical - (-3.4145662922608553)) < 1e-10,
               "Cointegration critical values use N=2 sample adjustment");
+    }
+    {
+      std::mt19937 rng(913);
+      std::normal_distribution<double> normal(0, .01);
+      std::vector<std::vector<double>> prices(5, std::vector<double>(1, 100));
+      for (int i = 1; i < 180; ++i) {
+        double market = normal(rng), sector = normal(rng), factor = normal(rng),
+               reference = normal(rng), noise = normal(rng) * .2;
+        std::vector<double> returns = {.8 * reference + 1.4 * market -
+                                           .6 * sector + .3 * factor + noise,
+                                       reference, market, sector, factor};
+        for (int a = 0; a < 5; ++a)
+          prices[a].push_back(prices[a].back() * (1 + returns[a]));
+      }
+      auto fit = sa_rv(prices, 1, 120, 1, {1});
+      require(std::abs(sa_rv_cost(2, 4, .5, 10, 100000, 1, 5, 3) -
+                       (.001 + .00004 + .5 * .03 * 10 / 365)) < 1e-12,
+              "Round-trip costs include both sides and calendar-day borrow");
+      std::vector<std::vector<SA_Bar>> cbars(5);
+      std::vector<SA_Asset> cassets(5);
+      double targets[5]{};
+      for (int a = 0; a < 5; ++a) {
+        for (size_t i = 0; i < prices[a].size(); ++i) {
+          double p = prices[a][i];
+          cbars[a].push_back({int64_t(i) * 86400000, p, p, p, p, 1000});
+        }
+        cassets[a] = {"T", cbars[a].data(), 0};
+      }
+      J opts = {{"reference_count", 1},  {"lookback", 120},
+                {"entry_z", .00001},     {"exit_z", 0},
+                {"stop_z", 1e6},         {"_sa_commission", 1e9},
+                {"_sa_slippage_bps", 5}, {"_sa_borrow_rate_percent", 3}};
+      int length = prices[0].size();
+      require(rv_cost_callback(cassets.data(), 5, length, 100000, 100000,
+                               opts.dump().c_str(), targets) == 0,
+              "Expensive entry rejected");
+      opts["_sa_commission"] = 0;
+      opts["_sa_slippage_bps"] = 0;
+      opts["_sa_borrow_rate_percent"] = 0;
+      require(rv_cost_callback(cassets.data(), 5, length, 100000, 100000,
+                               opts.dump().c_str(), targets) == 1,
+              "Positive capture scenario can enter at zero costs");
+      for (int a = 0; a < 5; ++a)
+        cassets[a].shares =
+            std::llround(targets[a] * 100000 / prices[a].back());
+      require(rv_cost_callback(cassets.data(), 5, length, 0, 100000,
+                               opts.dump().c_str(), targets) == 0,
+              "Small hedge drift skips rebalance");
+      entry_bar = length - 30;
+      require(rv_cost_callback(cassets.data(), 5, length, 0, 100000,
+                               opts.dump().c_str(), targets) == 1,
+              "Time exit overrides no-trade band");
+      for (double w : targets)
+        require(w == 0, "Time exit liquidates all legs");
+
+      require(std::abs(fit.reference_beta[0] - .8) < .1,
+              "Fitted basket recovers known reference loading");
+      for (double beta : fit.after)
+        require(std::abs(beta) < 1e-10,
+                "All modeled factor exposures removed in sample");
+      auto changed = prices;
+      changed[0].back() *= 1.03;
+      auto shocked = sa_rv(changed, 1, 120, 1, {1});
+      require(shocked.score > fit.score,
+              "Security-specific shock survives factor adjustment");
+      require(shocked.weights == fit.weights,
+              "Latest signal bar cannot affect estimated hedge coefficients");
+      auto collinear = prices;
+      collinear[4] = collinear[3];
+      bool rejected = false;
+      try {
+        sa_rv(collinear, 1, 120, 1, {1});
+      } catch (const std::exception &) {
+        rejected = true;
+      }
+      require(rejected, "Collinear factor sets fail closed");
+      auto lead = sa_rv(prices, 1, 120, 2, {1});
+      for (double beta : lead.after)
+        require(std::abs(beta) < 1e-10,
+                "Lead-lag target includes contemporaneous factor hedges");
+      require(lead.weights[1] == 0,
+              "Predictor is not mistaken for a contemporaneous hedge");
+    }
+    {
+      std::mt19937 rng(211);
+      std::normal_distribution<double> normal(0, .005);
+      std::vector<std::vector<double>> prices(29, std::vector<double>(1, 100));
+      for (int i = 1; i < 270; ++i) {
+        double target = normal(rng) * .1;
+        for (int a = 1; a < 29; ++a) {
+          double r = normal(rng);
+          prices[a].push_back(prices[a].back() * (1 + r));
+          target += (a <= 20 ? .05 : .2) * r;
+        }
+        prices[0].push_back(prices[0].back() * (1 + target));
+      }
+      auto wide = sa_rv(prices, 20, 200, 1, std::vector<double>(20, 1));
+      require(wide.weights.size() == 29,
+              "Twenty-constituent basket plus eight exposure hedges supported");
+      for (double b : wide.after)
+        require(std::abs(b) < 1e-9,
+                "Wide basket neutralizes all selected exposures");
     }
     std::cout << "Native accounting, time, pair statistics, and concurrent "
                  "alert tests passed\n";

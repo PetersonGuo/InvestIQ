@@ -1,4 +1,5 @@
 #include "common.hpp"
+#include "relative_value_config.hpp"
 #include <fcntl.h>
 #include <iomanip>
 #include <openssl/evp.h>
@@ -43,9 +44,9 @@ void load_config() {
     if (!getenv(m[1].str().c_str()))
       setenv(m[1].str().c_str(), v.c_str(), 0);
   }
-  config.mode = env("STOCKASSIST_DATA_MODE", "demo");
-  if (config.mode != "demo" && config.mode != "ibkr" && config.mode != "massive")
-    throw Error(500, "Invalid data mode.");
+  config.mode = env("STOCKASSIST_DATA_MODE", "ibkr");
+  if (config.mode != "ibkr" && config.mode != "massive")
+    throw Error(500, "Invalid data mode. Use ibkr or massive; real market data is required.");
   config.db = env("STOCKASSIST_DB", (config.root / "data" / (config.mode + ".sqlite3")).string());
   config.worker = config.root / "build/native/stockassist-worker";
   config.python = config.root / ".venv/bin/python";
@@ -257,42 +258,62 @@ void Db::exec(const std::string &s, const J &a) { rows(s, a); }
 int Db::changes() { return sqlite3_changes(db); }
 void initialize() {
   Db d;
-  for (const char *s : {"CREATE TABLE IF NOT EXISTS account (id INTEGER PRIMARY KEY "
-                        "CHECK(id=1),cash_cents INTEGER NOT NULL)",
-                        "INSERT OR IGNORE INTO account VALUES(1,10000000)",
-                        "CREATE TABLE IF NOT EXISTS positions(ticker TEXT PRIMARY KEY,quantity "
-                        "INTEGER NOT NULL,cost_cents INTEGER NOT NULL)",
-                        "CREATE TABLE IF NOT EXISTS orders(id TEXT PRIMARY KEY,ticker TEXT NOT "
-                        "NULL,side TEXT NOT NULL,quantity INTEGER NOT NULL,price_cents INTEGER "
-                        "NOT NULL,created_at TEXT NOT NULL,price_as_of TEXT NOT NULL)",
-                        "CREATE TABLE IF NOT EXISTS order_details(id TEXT PRIMARY KEY,request_id "
-                        "TEXT UNIQUE,request_json TEXT NOT NULL,detail_json TEXT NOT NULL)",
-                        "CREATE TABLE IF NOT EXISTS paper_liquidity(key TEXT PRIMARY KEY,used "
-                        "INTEGER NOT NULL,updated REAL NOT NULL)",
-                        "CREATE TABLE IF NOT EXISTS alerts(id TEXT PRIMARY KEY,ticker TEXT NOT "
-                        "NULL,direction TEXT NOT NULL,threshold REAL NOT NULL,active INTEGER "
-                        "NOT NULL DEFAULT 1,triggered_at TEXT,created_at TEXT NOT NULL)",
-                        "CREATE TABLE IF NOT EXISTS strategies(id TEXT PRIMARY KEY,name TEXT "
-                        "NOT NULL,language TEXT NOT NULL,code TEXT NOT NULL,params_json TEXT "
-                        "NOT NULL,updated_at TEXT NOT NULL)",
-                        "CREATE TABLE IF NOT EXISTS strategy_context(id TEXT PRIMARY "
-                        "KEY,tickers_json TEXT NOT NULL)",
-                        "CREATE TABLE IF NOT EXISTS backtest_runs(id TEXT PRIMARY KEY,status "
-                        "TEXT NOT NULL,created_at TEXT NOT NULL,request_json TEXT NOT "
-                        "NULL,result_json TEXT,error TEXT)",
-                        "CREATE TABLE IF NOT EXISTS backtest_cache(key TEXT PRIMARY KEY,run_id "
-                        "TEXT NOT NULL,expires REAL NOT NULL,day TEXT NOT NULL)",
-                        "CREATE TABLE IF NOT EXISTS pair_alerts(id TEXT PRIMARY KEY,config_json "
-                        "TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1,version INTEGER NOT "
-                        "NULL DEFAULT 1,created_at TEXT NOT NULL,updated_at TEXT NOT "
-                        "NULL,last_checked_at TEXT,last_as_of TEXT,last_matched INTEGER NOT "
-                        "NULL DEFAULT 0,latest_json TEXT,last_error TEXT,triggered_at TEXT)",
-                        "CREATE TABLE IF NOT EXISTS pair_events(id TEXT PRIMARY KEY,alert_id "
-                        "TEXT NOT NULL,version INTEGER NOT NULL,as_of TEXT NOT NULL,created_at "
-                        "TEXT NOT NULL,event_json TEXT NOT NULL,UNIQUE(alert_id,version,as_of))",
-                        "UPDATE backtest_runs SET status='failed',error='Backend restarted "
-                        "before this run completed. Run it again.' WHERE status IN "
-                        "('queued','running')"})
+  for (const char *s :
+       {"CREATE TABLE IF NOT EXISTS account (id INTEGER PRIMARY KEY "
+        "CHECK(id=1),cash_cents INTEGER NOT NULL)",
+        "INSERT OR IGNORE INTO account VALUES(1,10000000)",
+        "CREATE TABLE IF NOT EXISTS positions(ticker TEXT PRIMARY KEY,quantity "
+        "INTEGER NOT NULL,cost_cents INTEGER NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS orders(id TEXT PRIMARY KEY,ticker TEXT NOT "
+        "NULL,side TEXT NOT NULL,quantity INTEGER NOT NULL,price_cents INTEGER "
+        "NOT NULL,created_at TEXT NOT NULL,price_as_of TEXT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS order_details(id TEXT PRIMARY KEY,request_id "
+        "TEXT UNIQUE,request_json TEXT NOT NULL,detail_json TEXT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS paper_liquidity(key TEXT PRIMARY KEY,used "
+        "INTEGER NOT NULL,updated REAL NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS alerts(id TEXT PRIMARY KEY,ticker TEXT NOT "
+        "NULL,direction TEXT NOT NULL,threshold REAL NOT NULL,active INTEGER "
+        "NOT NULL DEFAULT 1,triggered_at TEXT,created_at TEXT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS price_alert_state(alert_id TEXT PRIMARY KEY,version INTEGER "
+        "NOT NULL DEFAULT 1,last_matched INTEGER NOT NULL DEFAULT 0,last_as_of TEXT)",
+        "CREATE TABLE IF NOT EXISTS price_events(id TEXT PRIMARY KEY,alert_id TEXT NOT NULL,ticker "
+        "TEXT NOT NULL,direction TEXT NOT NULL,threshold REAL NOT NULL,price REAL NOT NULL,as_of "
+        "TEXT NOT NULL,created_at TEXT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS strategies(id TEXT PRIMARY KEY,name TEXT "
+        "NOT NULL,language TEXT NOT NULL,code TEXT NOT NULL,params_json TEXT "
+        "NOT NULL,updated_at TEXT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS strategy_context(id TEXT PRIMARY "
+        "KEY,tickers_json TEXT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS backtest_runs(id TEXT PRIMARY KEY,status "
+        "TEXT NOT NULL,created_at TEXT NOT NULL,request_json TEXT NOT "
+        "NULL,result_json TEXT,error TEXT)",
+        "CREATE TABLE IF NOT EXISTS backtest_cache(key TEXT PRIMARY KEY,run_id "
+        "TEXT NOT NULL,expires REAL NOT NULL,day TEXT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS pair_alerts(id TEXT PRIMARY KEY,config_json "
+        "TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1,version INTEGER NOT "
+        "NULL DEFAULT 1,created_at TEXT NOT NULL,updated_at TEXT NOT "
+        "NULL,last_checked_at TEXT,last_as_of TEXT,last_matched INTEGER NOT "
+        "NULL DEFAULT 0,latest_json TEXT,last_error TEXT,triggered_at TEXT)",
+        "CREATE TABLE IF NOT EXISTS pair_alert_context(alert_id TEXT PRIMARY KEY,discovery_json "
+        "TEXT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS valuation_events(id TEXT PRIMARY KEY,schedule_id TEXT NOT "
+        "NULL,created_at TEXT NOT NULL,result_json TEXT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS stock_lists(id TEXT PRIMARY KEY,name TEXT NOT "
+        "NULL,tickers_json TEXT NOT NULL,version INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT "
+        "NULL,updated_at TEXT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS pair_schedules(id TEXT PRIMARY KEY,config_json TEXT NOT "
+        "NULL,active INTEGER NOT NULL DEFAULT 1,version INTEGER NOT NULL DEFAULT 1,running INTEGER "
+        "NOT NULL DEFAULT 0,next_run REAL NOT NULL,created_at TEXT NOT NULL,last_started "
+        "TEXT,last_finished TEXT,last_result TEXT,last_error TEXT)",
+        "CREATE TABLE IF NOT EXISTS pair_schedule_links(schedule_id TEXT NOT NULL,pair_key TEXT "
+        "NOT NULL,alert_id TEXT NOT NULL,PRIMARY KEY(schedule_id,pair_key))",
+        "UPDATE pair_schedules SET running=0",
+        "CREATE TABLE IF NOT EXISTS pair_events(id TEXT PRIMARY KEY,alert_id "
+        "TEXT NOT NULL,version INTEGER NOT NULL,as_of TEXT NOT NULL,created_at "
+        "TEXT NOT NULL,event_json TEXT NOT NULL,UNIQUE(alert_id,version,as_of))",
+        "UPDATE backtest_runs SET status='failed',error='Backend restarted "
+        "before this run completed. Run it again.' WHERE status IN "
+        "('queued','running')"})
     d.exec(s);
 }
 TempDir::TempDir() {
@@ -389,8 +410,8 @@ J validate_strategy(J j) {
            {"params", p}};
   if (j.contains("tickers")) {
     auto values = j["tickers"];
-    if (!values.is_array() || values.empty() || values.size() > 10)
-      throw Error(422, "Choose 1–10 stock symbols.");
+    if (!values.is_array() || values.empty() || values.size() > 32)
+      throw Error(422, "Choose 1–32 stock symbols.");
     std::vector<std::string> seen;
     for (auto &value : values) {
       if (!value.is_string())
@@ -418,8 +439,8 @@ J validate_backtest(J j) {
   if (i != "1d" && b - a > 31 * 86400)
     throw Error(422, "Intraday windows support up to 31 calendar days.");
   J tickers = j.value("tickers", J::array({text(j, "ticker")}));
-  if (!tickers.is_array() || tickers.empty() || tickers.size() > 10)
-    throw Error(422, "Choose 1–10 stock symbols.");
+  if (!tickers.is_array() || tickers.empty() || tickers.size() > 32)
+    throw Error(422, "Choose 1–32 stock symbols.");
   std::vector<std::string> seen;
   for (auto &value : tickers) {
     if (!value.is_string())
@@ -431,6 +452,8 @@ J validate_backtest(J j) {
     value = ticker;
   }
   out["tickers"] = tickers;
+  if (j.contains("replay_run_id"))
+    out["replay_run_id"] = text(j, "replay_run_id", "", 100);
   out["max_gross_exposure"] = number(j, "max_gross_exposure", 1, .1, 2);
   out["borrow_rate_percent"] = number(j, "borrow_rate_percent", 3, 0, 100);
   out.update({{"ticker", tickers[0]},
@@ -440,13 +463,15 @@ J validate_backtest(J j) {
               {"initial_cash", number(j, "initial_cash", 100000, 100, 1e8)},
               {"commission", number(j, "commission", 1, 0, 1000)},
               {"slippage_bps", number(j, "slippage_bps", 5, 0, 1000)},
-              {"warmup", int(number(j, "warmup", 30, 0, 250, true))},
+              {"warmup", int(number(j, "warmup", 30, 0, 1000, true))},
               {"force_rerun", boolean(j, "force_rerun")}});
   if (out["commission"].get<double>() > out["initial_cash"].get<double>())
     throw Error(422, "Commission cannot exceed capital.");
   return out;
 }
 J validate_pair(J j) {
+  if (j.contains("relative_value"))
+    return validate_relative_value(j["relative_value"]);
   J c = {{"ticker_a", symbol(text(j, "ticker_a"))},
          {"ticker_b", symbol(text(j, "ticker_b"))},
          {"metric", choice(j, "metric", "zscore", {"zscore", "ratio"})},
@@ -454,7 +479,7 @@ J validate_pair(J j) {
          {"threshold", number(j, "threshold", 2, -1e5, 1e5)},
          {"lookback", int(number(j, "lookback", 60, 20, 250, true))},
          {"hedge_ratio", number(j, "hedge_ratio", 1, -100, 100)},
-         {"repeat", boolean(j, "repeat")}};
+         {"repeat", boolean(j, "repeat", true)}};
   if (std::abs(c["hedge_ratio"].get<double>()) < 1e-12)
     throw Error(422, "Hedge ratio must be nonzero.");
   double t = c["threshold"];

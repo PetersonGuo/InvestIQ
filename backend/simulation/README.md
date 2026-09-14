@@ -1,5 +1,7 @@
 # Modular backtesting
 
+For a step-by-step authoring tutorial, read the [developer strategy guide](../../frontend/public/docs/strategies.md), available in the app at `/docs/strategies`. To drive jobs from your own program, see the [HTTP reference](../../frontend/public/docs/api.md) and [runnable client](../../examples/api/run_backtest.py).
+
 Open `/research` in the web app. Scan IBKR stocks or search for a symbol, choose Python or C++, import/paste your code, configure dates and costs, and run. Saved strategy versions and completed runs persist in the current data-mode SQLite database. Export JSON includes the exact strategy source, parameters, bars, data checksum, assumptions, equity curve, and fills.
 
 ## Single-stock Python strategy contract
@@ -54,7 +56,7 @@ The included moving-average examples in `examples/` implement the same algorithm
 - At each bar's open, execute the target produced at the previous close. Apply adverse slippage to the open and a fixed commission per nonzero fill. Buy size is capped by available cash including the fee.
 - At each close, mark holdings to market and call the strategy with history only through that close. Signals produced by the final bar cannot fill and are reported as unfilled.
 - `warmup` suppresses trades for the first N bars while still calling the strategy to build state. The curve begins at the first bar after those N warmup bars; its first signal can fill on the following open.
-- Buy-and-hold enters at that same first eligible open, with the same cash, fee, and slippage assumptions. It holds through the final close.
+- Buy-and-hold enters at the next open after the first eligible close (bar index warmup + 1), with the same cash, fee, and slippage assumptions. It holds through the final close.
 - Open positions are not forcibly liquidated at the end. The final equity includes their marked value.
 - Equity drawdown is measured from the running equity peak, including initial capital. Sharpe uses close-to-close returns, a zero risk-free rate, and 252 sessions/year. Annualized return uses the number of simulated sessions and can be misleading for short windows. Win rate counts profitable realized sell fills, not grouped round trips.
 - No dividend, tax, borrow, volume-participation, halt, spread, or full corporate-action simulation. There is no guaranteed next-open liquidity. Historical provider bars may be split-adjusted.
@@ -76,7 +78,7 @@ Both the server and worker are compiled ahead of time by `npm run build:backend`
 
 ## Local code execution
 
-Run only strategy code you trust. These are ordinary Python/C++ programs with the local user's filesystem permissions, not security-sandboxed code. Workers receive a minimal environment rather than IBKR or Supabase environment variables, but that is not filesystem or network isolation. Do not expose this service publicly.
+Run only strategy code you trust. These are ordinary Python/C++ programs with the local user's filesystem permissions, not security-sandboxed code. Workers receive a minimal environment rather than broker/provider environment variables, but that is not filesystem or network isolation. Do not expose this service publicly.
 
 The API enforces local host/origin checks. There are at most two active jobs. Compilation has a 30-second wall limit; strategy execution has a 12-second wall limit and an 8-second CPU limit. Worker file/log output is capped by a 64 MiB file-size limit; the report keeps only the first 4,000 log characters. Process groups are terminated on completion or timeout. Native crashes, Python exceptions, and compiler errors are returned as failed runs rather than crashing the API. There is no portable memory sandbox or guarantee against malicious code.
 
@@ -90,9 +92,8 @@ Choose a **Starter strategy**, select Python or C++, and click **Load preset**. 
 | Buy and hold | None | 0 | Passive baseline; invests once at the first eligible open and holds. Matches the report benchmark with identical costs and warmup. |
 | Price-channel breakout | `entry_period=20`, `exit_period=10` | 20 | Buys a close above prior highs; exits below prior lows. Excludes the current bar from both channels. |
 | Z-score mean reversion | `lookback=20`, `entry_z=2`, `exit_z=0` | 20 | Buys unusually low closes relative to their rolling mean and exits on recovery. Uses population standard deviation including the current completed close; flat windows hold. |
-
 | Cointegration pair mean reversion | `lookback=60`, `entry_z=2`, `exit_z=0.5`, `stop_z=4` | 60 | Two-stock long/short strategy gated by prior-window cointegration evidence; exits on loss of evidence or spread exit/stop levels. |
-| Equal-weight basket buy and hold | None | 0 | Invests equally across 2–10 selected stocks and holds. |
+| Equal-weight basket buy and hold | None | 0 | Invests equally across 2–32 selected stocks and holds. |
 
 These are transparent comparison baselines, not tuned or proven-profitable strategies. Trend and breakout rules can whipsaw; mean reversion can stay exposed during sustained declines. Use the same data window, costs, and warmup to compare strategies on equal terms. Prefer a separate evaluation window after choosing parameters rather than optimizing and judging on the same bars.
 
@@ -112,15 +113,15 @@ Intraday jobs fetch the selected range across up to 40 bounded pages, limited to
 
 IBKR history pages follow duration/bar-size limits. The adapter caches pages for 60 seconds, spaces small-bar requests, prevents identical small requests within 15 seconds, and keeps a conservative local budget of 55 small-bar/tick requests per ten minutes. IBKR can impose additional account-level limits. Bars of 30 seconds and smaller have roughly six months of retention. Panning at a retention/permission limit shows the provider error; choose a coarser interval to go farther back.
 
-The dashboard **Individual trades · IBKR Time & Sales** panel fetches the latest regular-session historical trade records and exports JSON. Every returned trade is preserved, including multiple trades at the same one-second timestamp. IBKR may return more than 1,000 records to complete a second. This is a cached snapshot, not a streaming subscription. The backtester consumes candles, not these raw trade records. Daily alerts and paper fills still use completed daily closes.
+The dashboard **Individual trades · IBKR Time & Sales** panel fetches the latest regular-session historical trade records and exports JSON. Every returned trade is preserved, including multiple trades at the same one-second timestamp. IBKR may return more than 1,000 records to complete a second. This is a cached snapshot, not a streaming subscription. The backtester consumes candles, not these raw trade records. Alerts use completed daily closes; paper fills use live IBKR bid/ask quotes.
 
 Sources: [Historical bars](https://www.interactivebrokers.com/docs/tws-api/doc/market-data-historical/historical-bars/receiving-historical-bars), [request pacing](https://www.interactivebrokers.com/docs/tws-api/doc/market-data-historical/historical-data-limitations/pacing-violations-for-small-bars-30-secs-or-less), [historical Time & Sales](https://interactivebrokers.github.io/tws-api/historical_time_and_sales.html).
 
 ## Multi-stock portfolios and references
 
-Use `tickers: ["AAPL", "MSFT", ...]` (2–10 distinct symbols) in a backtest request, or load **Cointegration pair mean reversion** / **Equal-weight basket buy and hold** in Research. `ticker` remains the primary symbol for old clients. Stock ordering is preserved. Saved strategy versions retain their symbol lists. `max_gross_exposure` defaults to 1.0 and accepts 0.1–2.0; `borrow_rate_percent` defaults to 3% annually. Maximum aligned data is 200,000 asset-bars across portfolio stocks, within the existing per-stock history limits.
+Use `tickers: ["AAPL", "MSFT", ...]` (2–32 distinct symbols) in a backtest request, or load **Cointegration pair mean reversion** / **Equal-weight basket buy and hold** in Research. `ticker` remains the primary symbol for old clients. Stock ordering is preserved. Saved strategy versions retain their symbol lists. `max_gross_exposure` defaults to 1.0 and accepts 0.1–2.0; `borrow_rate_percent` defaults to 3% annually. Maximum aligned data is 200,000 asset-bars across portfolio stocks, within the existing per-stock history limits.
 
-C++ portfolio code exports `on_portfolio` from `strategy_api.h`. It receives an array of `SA_Asset` objects (symbol, completed-history pointer, signed shares), asset count, visible bar count, cash, equity, parameters, and a writable target-weight array. Return 0 to hold or 1 to submit the complete portfolio target. Positive weights are long and negative weights short; the sum of absolute weights must not exceed the configured gross limit. The callback runs at a completed close and fills at the next shared open. See `examples/equal_weight.cpp` and `examples/pairs_mean_reversion.cpp`.
+C++ portfolio code exports `on_portfolio` from `strategy_api.h`. It receives an array of `SA_Asset` objects (symbol, completed-history pointer, signed shares), asset count, visible bar count, cash, equity, parameters, and a writable target-weight array. Return 0 to hold or 1 to submit the complete portfolio target. Positive weights are long and negative weights short; the sum of absolute weights must not exceed the configured gross limit. The callback starts at the first completed close after warmup, receives the full warmup history prefix, and fills targets at the next shared open. Unlike single-stock mode, portfolio mode does not call the strategy separately during warmup. See `examples/equal_weight.cpp` and `examples/pairs_mean_reversion.cpp`.
 
 Python portfolio code continues to define `Strategy.on_bar(ctx)`, but uses `ctx.histories[symbol]` and `ctx.portfolio.positions[symbol]`, plus cash/equity/params. Return `None` to hold or a dictionary of signed target weights. Omitted symbols target zero; unknown symbols and nonnumeric/bool targets reject. History windows expose completed bars only. The account simulation and reporting still execute in C++; Python is loaded only for a Python strategy.
 
@@ -137,3 +138,7 @@ Pair previews and discovery now run a two-step Engle–Granger test on the **pre
 Discovery accepts `relationship: positive|negative|either` and `require_cointegration: true|false`; correlation thresholds apply to magnitude for negative/either scans. The cointegration filter applies to discovery-time evidence. Saved alerts continue to evaluate their configured spread threshold; they do not automatically cancel if cointegration later weakens. The default pair backtest starter does re-test on each prior window, exits on lost evidence, uses entry/exit/stop z bands, and supports both spread directions. The preview's deviation uses its configured hedge, which can differ from the independently fitted hedge used by the test.
 
 Inverse (negative hedge) relationships are supported. Their mean-reversion trade can put both legs long or both legs short; direction text and leg records reflect that, and the UI explicitly identifies the exposure as not market-neutral. Reverse pair order swaps the symbols and reciprocal hedge for a new preview. Current-day discovery used to choose historical backtest pairs introduces selection bias; use a historically valid selection procedure for research.
+
+## Exposure-adjusted relative value
+
+The C++ `relative_value.cpp` example and `relative_value_math.h` implement prior-only QR exposure fitting, cumulative return residuals, basket hedges and daily residual lead-lag. Use the app's relative-value strategy export to generate parameters and correctly ordered symbols. The native compiler supplies this header; its content contributes to the build/cache fingerprint. See [the full model and API contract](../../frontend/public/docs/api.md#relative-value-models), including event terms, portfolio hedge legs, and unsupported foreign/direct derivative contracts.

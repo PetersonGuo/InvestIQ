@@ -1,13 +1,11 @@
 #include "market.hpp"
 #include <curl/curl.h>
-#include <numeric>
 namespace sa {
 namespace {
-const std::map<std::string, std::pair<std::string, double>> companies = {
-    {"AAPL", {"Apple Inc.", 218}},         {"MSFT", {"Microsoft Corporation", 425}},
-    {"NVDA", {"NVIDIA Corporation", 132}}, {"GOOGL", {"Alphabet Inc.", 176}},
-    {"AMZN", {"Amazon.com Inc.", 198}},    {"META", {"Meta Platforms Inc.", 540}},
-    {"TSLA", {"Tesla Inc.", 245}},         {"SPY", {"SPDR S&P 500 ETF", 562}}};
+const std::map<std::string, std::string> companies = {
+    {"AAPL", "Apple Inc."},     {"MSFT", "Microsoft Corporation"}, {"NVDA", "NVIDIA Corporation"},
+    {"GOOGL", "Alphabet Inc."}, {"AMZN", "Amazon.com Inc."},       {"META", "Meta Platforms Inc."},
+    {"TSLA", "Tesla Inc."},     {"SPY", "SPDR S&P 500 ETF"}};
 size_t append(char *p, size_t size, size_t n, void *out) {
   auto &s = *static_cast<std::string *>(out);
   if (s.size() + size * n > 64 * 1024 * 1024)
@@ -64,6 +62,17 @@ std::string escape(const std::string &s) {
 }
 } // namespace
 J massive_data(const std::string &path) { return provider_get(path); }
+J company_profile(const std::string &ticker) {
+  if (config.mode == "ibkr")
+    return ib_request("profile", {{"symbol", ticker}});
+  auto data = massive_data("/v3/reference/tickers/" + ticker).value("results", J::object());
+  return {{"ticker", ticker},
+          {"name", data.value("name", ticker)},
+          {"industry", data.value("sic_description", "")},
+          {"category", data.value("sic_description", "")},
+          {"source", "massive"},
+          {"fetched_at", stamp()}};
+}
 J history(const std::string &s, int days, const std::string &before, const std::string &interval) {
   auto r = resolution(interval);
   J bars = J::array();
@@ -72,54 +81,6 @@ J history(const std::string &s, int days, const std::string &before, const std::
     bars = ib_request("history", {{"symbol", s}, {"interval", interval}, {"before", before}});
     if (daily && bars.size() > size_t(days))
       bars.erase(bars.begin(), bars.end() - days);
-  } else if (config.mode == "demo") {
-    if (!companies.count(s))
-      throw Error(404, "Ticker not available in the demo dataset.");
-    double base = companies.at(s).second;
-    int seed = std::accumulate(s.begin(), s.end(), 0);
-    if (daily) {
-      double end = parse_time(before.empty() ? stamp(-1, true) : before);
-      for (int offset = 365; offset > 0; --offset) {
-        double t = end - offset * 86400;
-        time_t seconds = t;
-        std::tm tm{};
-        gmtime_r(&seconds, &tm);
-        if (tm.tm_wday == 0 || tm.tm_wday == 6)
-          continue;
-        double day = std::floor(t / 86400) + 719163;
-        double close = rounded(
-                   base * (1 + .06 * std::sin(day / 19 + seed) + .018 * std::sin(day / 3 + seed)),
-                   2),
-               open = rounded(close * (1 + .008 * std::sin(day + seed)), 2);
-        bars.push_back({{"time", stamp(t, true)},
-                        {"open", open},
-                        {"high", rounded(std::max(open, close) * 1.012, 2)},
-                        {"low", rounded(std::min(open, close) * .988, 2)},
-                        {"close", close},
-                        {"volume", int64_t(15000000 + 9000000 * (1 + std::sin(day + seed)))}});
-      }
-      if (bars.size() > size_t(days))
-        bars.erase(bars.begin(), bars.end() - days);
-    } else {
-      double end = before.empty() ? now() : parse_time(before),
-             t = std::floor(end / r.seconds) * r.seconds - r.seconds;
-      while (bars.size() < 500) {
-        auto local = ny_time(t);
-        int minute = local.tm_hour * 60 + local.tm_min;
-        if (local.tm_wday != 0 && local.tm_wday != 6 && minute >= 570 && minute < 960) {
-          double open = rounded(base * (1 + .004 * std::sin(t / 600)), 4),
-                 close = rounded(open * (1 + .0002 * std::sin(t)), 4);
-          bars.push_back({{"time", stamp(t)},
-                          {"open", open},
-                          {"high", std::max(open, close) + .01},
-                          {"low", std::min(open, close) - .01},
-                          {"close", close},
-                          {"volume", 1000}});
-        }
-        t -= r.seconds;
-      }
-      std::reverse(bars.begin(), bars.end());
-    }
   } else {
     if (!daily)
       throw Error(422, "Intraday data currently requires IBKR mode.");
@@ -151,7 +112,7 @@ J history(const std::string &s, int days, const std::string &before, const std::
   double previous =
       bars.size() > 1 ? bars[bars.size() - 2]["close"].get<double>() : last["open"].get<double>();
   return {{"ticker", s},
-          {"name", companies.count(s) ? companies.at(s).first : s},
+          {"name", companies.count(s) ? companies.at(s) : s},
           {"source", config.mode},
           {"as_of", last["time"]},
           {"price", last["close"]},
@@ -164,16 +125,6 @@ J search(const std::string &q, int limit) {
   J rows = J::array();
   if (config.mode == "ibkr") {
     rows = ib_request("search", q.empty() ? "A" : q);
-  } else if (config.mode == "demo") {
-    auto lower = [](std::string s) {
-      std::transform(s.begin(), s.end(), s.begin(),
-                     [](unsigned char c) { return std::tolower(c); });
-      return s;
-    };
-    for (auto &[s, c] : companies)
-      if (lower(s).find(lower(q)) != std::string::npos ||
-          lower(c.first).find(lower(q)) != std::string::npos)
-        rows.push_back({{"ticker", s}, {"name", c.first}});
   } else {
     auto data = provider_get("/v3/reference/tickers?market=stocks&active=true&limit=" +
                              std::to_string(limit) + "&sort=ticker&search=" + escape(q));
@@ -197,27 +148,7 @@ J scan(J q) {
   J rows = J::array();
   if (config.mode == "ibkr")
     rows = ib_request("scanner", f);
-  else if (config.mode == "demo") {
-    std::vector<J> items;
-    for (auto &[s, _] : companies) {
-      auto item = history(s, 2);
-      if (item["price"] >= f["min_price"] && item["price"] <= f["max_price"] &&
-          item["bars"].back()["volume"] >= f["min_volume"])
-        items.push_back(item);
-    }
-    std::sort(items.begin(), items.end(), [&](const J &a, const J &b) {
-      double av = f["scan_code"] == "HOT_BY_VOLUME" ? a["bars"].back()["volume"].get<double>()
-                                                    : a["change_percent"].get<double>(),
-             bv = f["scan_code"] == "HOT_BY_VOLUME" ? b["bars"].back()["volume"].get<double>()
-                                                    : b["change_percent"].get<double>();
-      return f["scan_code"] == "TOP_PERC_LOSE" ? av < bv : av > bv;
-    });
-    for (size_t i = 0; i < items.size() && i < size_t(f["limit"].get<int>()); i++)
-      rows.push_back({{"rank", i + 1},
-                      {"ticker", items[i]["ticker"]},
-                      {"name", items[i]["name"]},
-                      {"exchange", "DEMO"}});
-  } else
+  else
     throw Error(422, "Market scanning requires IBKR mode.");
   return {{"results", rows},
           {"source", config.mode},
@@ -235,21 +166,6 @@ J ticks(const std::string &s, const std::string &before) {
 J quote(const std::string &ticker) {
   if (config.mode == "ibkr")
     return ib_request("quote", {{"symbol", ticker}});
-  if (config.mode != "demo")
-    throw Error(422, "Live quotes currently require IBKR mode.");
-  double price = history(ticker, 2)["price"];
-  return {{"ticker", ticker},
-          {"source", "demo"},
-          {"market_data_type", 1},
-          {"bid", price - .01},
-          {"ask", price + .01},
-          {"last", price},
-          {"bid_size", 100},
-          {"ask_size", 100},
-          {"last_time", stamp()},
-          {"bid_received_at", stamp()},
-          {"ask_received_at", stamp()},
-          {"received_at", stamp()},
-          {"connected", true}};
+  throw Error(422, "Live quotes currently require IBKR mode.");
 }
 } // namespace sa

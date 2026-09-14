@@ -1,4 +1,5 @@
 export type PairConfig = {
+  relative_value?: Record<string, unknown>;
 	ticker_a: string;
 	ticker_b: string;
 	metric: "zscore" | "ratio";

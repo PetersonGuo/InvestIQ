@@ -10,7 +10,7 @@ test("search, paper fills, alerts, and persistence through the UI", async ({
     page.getByRole("heading", { name: "Market overview" }),
   ).toBeVisible();
   await expect(
-    page.getByText("SYNTHETIC DEMO DATA", { exact: false }),
+    page.getByText("FIXTURE · HISTORICAL DATA", { exact: false }),
   ).toBeVisible();
   await page.getByLabel("Search stocks").fill("Microsoft");
   await page
@@ -100,7 +100,15 @@ test('background worker triggers a saved alert', async ({ page }) => {
   await expect(page.getByRole('img', { name: /AAPL daily candlestick/ })).toBeVisible();
   await page.getByLabel('Target price · USD').fill('1');
   await page.getByRole('button', { name: 'Create alert', exact: true }).click();
-  await expect(page.getByText('Triggered', { exact: true })).toBeVisible({ timeout: 45000 });
+  const history = page.getByRole('region', {name: 'Price notification history'});
+  await expect(history.getByText('AAPL triggered', {exact: false})).toBeVisible({timeout: 45000});
+  await expect(page.getByText('Watching', {exact: true})).toBeVisible();
+  await page.getByRole('button', {name: 'Pause', exact: true}).click();
+  await page.reload();
+  await expect(page.getByText('Paused', {exact: true})).toBeVisible();
+  await expect(history.getByText('AAPL triggered', {exact: false})).toBeVisible();
+  await page.getByRole('button', {name: 'Resume', exact: true}).click();
+  await expect(page.getByText('Watching', {exact: true})).toBeVisible();
   await page.screenshot({ path: 'test-results/dashboard-desktop.png', fullPage: true });
   await page.getByRole('button', { name: 'Delete AAPL alert' }).click();
 });

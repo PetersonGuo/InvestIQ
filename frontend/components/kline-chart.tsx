@@ -94,7 +94,7 @@ export default function KLineChart({
 					);
 				} else {
 					setLiveStatus(
-						`${quote.source === "demo" ? "Demo quotes" : "Live IBKR"} · ${quote.last.toFixed(2)} · ${new Date(quote.last_time!).toLocaleTimeString()} · sampled candles`,
+						`Live IBKR · ${quote.last.toFixed(2)} · ${new Date(quote.last_time!).toLocaleTimeString()} · sampled candles`,
 					);
 					const observation = `${quote.last_time}:${quote.last}`;
 					if (observation !== lastObservation) {

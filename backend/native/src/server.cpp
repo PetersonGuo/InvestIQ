@@ -1,6 +1,9 @@
 #include "backtests.hpp"
 #include "httplib.h"
 #include "pairs.hpp"
+#include "relative_value.hpp"
+#include "stock_lists.hpp"
+#include "valuation.hpp"
 #include <condition_variable>
 #include <csignal>
 #include <iostream>
@@ -44,6 +47,7 @@ J create_alert(const J &q, const std::string &existing = "") {
   history(a["ticker"], 2);
   Db d;
   auto key = existing.empty() ? id() : existing;
+  d.exec("BEGIN IMMEDIATE");
   if (existing.empty()) {
     a.update({{"id", key}, {"active", 1}, {"triggered_at", nullptr}, {"created_at", stamp()}});
     d.exec("INSERT INTO alerts VALUES(?,?,?,?,1,NULL,?)",
@@ -57,6 +61,10 @@ J create_alert(const J &q, const std::string &existing = "") {
       throw Error(404, "Alert not found.");
     a = d.rows("SELECT * FROM alerts WHERE id=?", {key})[0];
   }
+  d.exec("INSERT INTO price_alert_state(alert_id) VALUES(?) ON CONFLICT(alert_id) DO UPDATE SET "
+         "version=version+1,last_matched=0,last_as_of=NULL",
+         {key});
+  d.exec("COMMIT");
   return a;
 }
 std::atomic<bool> shutdown_requested{false};
@@ -186,6 +194,23 @@ int main(int argc, char **argv) {
       Db d;
       json(r, d.rows("SELECT * FROM alerts ORDER BY created_at DESC"));
     };
+    server.Get("/api/alerts/events", [](const auto &, auto &r) {
+      Db d;
+      json(r, d.rows("SELECT * FROM price_events ORDER BY created_at DESC,rowid DESC LIMIT 100"));
+    });
+    server.Post(R"(/api/alerts/([^/]+)/state)", [](const auto &q, auto &r) {
+      auto active = boolean(object(q), "active");
+      Db d;
+      d.exec("BEGIN IMMEDIATE");
+      d.exec("UPDATE alerts SET active=? WHERE id=?", {active ? 1 : 0, q.matches[1].str()});
+      if (!d.changes())
+        throw Error(404, "Alert not found.");
+      d.exec("UPDATE price_alert_state SET version=version+1 WHERE alert_id=?",
+             {q.matches[1].str()});
+      auto result = d.rows("SELECT * FROM alerts WHERE id=?", {q.matches[1].str()})[0];
+      d.exec("COMMIT");
+      json(r, result);
+    });
     server.Get("/api/alerts", alert_list);
     server.Post("/api/alert/list", alert_list);
     auto add_alert = [](const auto &q, auto &r) { json(r, create_alert(object(q)), 201); };
@@ -235,6 +260,37 @@ int main(int argc, char **argv) {
     server.Post("/api/backtests", [](const auto &q, auto &r) {
       json(r, backtest_submit(validate_backtest(object(q))), 202);
     });
+    server.Get("/api/pairs/stock-lists", [](const auto &, auto &r) { json(r, stock_lists()); });
+    server.Post("/api/pairs/stock-lists",
+                [](const auto &q, auto &r) { json(r, save_stock_list(object(q)), 201); });
+    server.Put(R"(/api/pairs/stock-lists/([^/]+))",
+               [](const auto &q, auto &r) { json(r, save_stock_list(object(q), q.matches[1])); });
+    server.Delete(R"(/api/pairs/stock-lists/([^/]+))", [](const auto &q, auto &r) {
+      delete_stock_list(q.matches[1]);
+      r.status = 204;
+    });
+    server.Get("/api/pairs/opportunities",
+               [](const auto &, auto &r) { json(r, pair_opportunities()); });
+    server.Get("/api/pairs/valuation/events", [](const auto &, auto &r) {
+      Db d;
+      J out = J::array();
+      for (auto row : d.rows("SELECT * FROM valuation_events ORDER BY created_at DESC LIMIT 100")) {
+        row["result"] = J::parse(row["result_json"].get<std::string>());
+        row.erase("result_json");
+        out.push_back(row);
+      }
+      json(r, out);
+    });
+    server.Post("/api/pairs/valuation",
+                [](const auto &q, auto &r) { json(r, peer_valuation(object(q))); });
+    server.Get("/api/pairs/relative-value/catalog",
+               [](const auto &, auto &r) { json(r, relative_value_catalog()); });
+    server.Post("/api/pairs/relative-value/strategy", [](const auto &q, auto &r) {
+      auto c = validate_pair(object(q));
+      if (!c.contains("relative_value"))
+        throw Error(422, "relative_value is required.");
+      json(r, relative_value_strategy(c));
+    });
     server.Post("/api/pairs/discover",
                 [](const auto &q, auto &r) { json(r, discover_pairs(object(q))); });
     server.Post("/api/pairs/preview",
@@ -255,6 +311,23 @@ int main(int argc, char **argv) {
         throw Error(422, "active is required.");
       json(r, pair_state(q.matches[1], boolean(j, "active")));
     });
+    server.Get("/api/pairs/schedules", [](const auto &, auto &r) { json(r, schedule_list()); });
+    server.Post("/api/pairs/schedules",
+                [](const auto &q, auto &r) { json(r, schedule_save(object(q)), 201); });
+    server.Put(R"(/api/pairs/schedules/([^/]+))",
+               [](const auto &q, auto &r) { json(r, schedule_save(object(q), q.matches[1])); });
+    server.Delete(R"(/api/pairs/schedules/([^/]+))", [](const auto &q, auto &r) {
+      schedule_action(q.matches[1], "delete");
+      r.status = 204;
+    });
+    server.Post(R"(/api/pairs/schedules/([^/]+)/run)",
+                [](const auto &q, auto &r) { json(r, schedule_action(q.matches[1], "run"), 202); });
+    server.Post(R"(/api/pairs/schedules/([^/]+)/state)", [](const auto &q, auto &r) {
+      auto j = object(q);
+      if (!j.contains("active"))
+        throw Error(422, "active is required.");
+      json(r, schedule_action(q.matches[1], "state", boolean(j, "active")));
+    });
     server.Get("/api/pairs/events", [](const auto &, auto &r) { json(r, pair_events()); });
     std::signal(SIGTERM, on_signal);
     std::signal(SIGINT, on_signal);
@@ -273,6 +346,19 @@ int main(int argc, char **argv) {
         wait.wait_for(lock, stop, std::chrono::seconds(30), [] { return false; });
       }
     });
+    std::jthread schedules([](std::stop_token stop) {
+      std::mutex m;
+      std::condition_variable_any wait;
+      while (!stop.stop_requested()) {
+        try {
+          check_pair_schedules();
+        } catch (const std::exception &e) {
+          std::cerr << "Pair discovery: " << e.what() << '\n';
+        }
+        std::unique_lock lock(m);
+        wait.wait_for(lock, stop, std::chrono::seconds(2), [] { return false; });
+      }
+    });
     std::jthread monitor([&](std::stop_token stop) {
       while (!stop.stop_requested() && !shutdown_requested)
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -285,7 +371,9 @@ int main(int argc, char **argv) {
     bool success = server.listen("127.0.0.1", config.port);
     monitor.request_stop();
     alerts.request_stop();
+    schedules.request_stop();
     alerts.join();
+    schedules.join();
     backtests_stop();
     if (config.mode == "ibkr")
       ib_close();

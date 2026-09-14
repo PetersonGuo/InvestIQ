@@ -56,6 +56,15 @@ int main(int argc, char **argv) {
                                           input["settings"])
                      : simulate(input["bars"], callback, input["params"], input["settings"]);
     add_comparison(result, input, input["settings"]);
+    if (input["language"] == "cpp") {
+      auto diagnostic =
+          reinterpret_cast<const char *(*)()>(dlsym(module, "sa_strategy_diagnostics"));
+      if (diagnostic) {
+        auto raw = diagnostic();
+        if (raw)
+          result["strategy_diagnostics"] = J::parse(raw);
+      }
+    }
     response = {{"result", result}};
   } catch (const std::exception &e) {
     response = {{"error", e.what()}};

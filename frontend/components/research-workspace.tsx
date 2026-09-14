@@ -55,6 +55,7 @@ type RunInput = Strategy & {
 	warmup: number;
 };
 type Result = {
+ strategy_diagnostics?: Record<string, number>;
 	risk_comparison?: Record<string, Record<string, number | null>>;
 	risk_basis?: string;
 	benchmark_label?: string;
@@ -127,6 +128,8 @@ export default function ResearchWorkspace() {
 	const [error, setError] = useState("");
 	const [notice, setNotice] = useState("");
 	const [forceRerun, setForceRerun] = useState(false);
+ const [replayRunId,setReplayRunId]=useState("");
+ const [replayData,setReplayData]=useState(false);
 	const [busy, setBusy] = useState(false);
 	const [scanning, setScanning] = useState(false);
 	const [scanCode, setScanCode] = useState("HOT_BY_VOLUME");
@@ -222,6 +225,7 @@ export default function ResearchWorkspace() {
 		if (next === language) return;
 		setDrafts((previous) => ({ ...previous, [language]: code }));
 		setLanguage(next);
+    if (!templates.some(t => t.language === next && t.template_id === presetId)) setPresetId("moving_average");
 		setCode(
 			drafts[next] ??
 				templates.find(
@@ -232,12 +236,15 @@ export default function ResearchWorkspace() {
 		);
 	}
 	function load(strategy: Strategy) {
+ setReplayRunId("");setReplayData(false);
 		setDrafts((previous) => ({ ...previous, [language]: code }));
 		setLoadedPreset(strategy.template_id ?? null);
 		setName(strategy.name);
 		setLanguage(strategy.language);
 		setCode(strategy.code);
 		setParams(JSON.stringify(strategy.params, null, 2));
+    if (strategy.warmup !== undefined) setWarmup(String(strategy.warmup));
+    else if (strategy.code.includes("relative_value_math.h")) setWarmup(String(Number(strategy.params.lookback ?? 120) + 2));
 		if (strategy.tickers?.length) {
 			setTicker(strategy.tickers[0]);
 			setAdditionalTickers(strategy.tickers.slice(1).join(", "));
@@ -359,6 +366,7 @@ export default function ResearchWorkspace() {
 				slippage_bps: Number(slippage),
 				warmup: Number(warmup),
 				force_rerun: forceRerun,
+        ...(replayData && replayRunId ? {replay_run_id:replayRunId}:{}),
 			};
 			const response = await api<Run & { cache_hit: boolean }>(
 				"backtests",
@@ -423,6 +431,7 @@ export default function ResearchWorkspace() {
 	function loadRun() {
 		if (!run) return;
 		load(run.request);
+    if(run.status==="completed")setReplayRunId(run.id);
 		setTicker(run.request.ticker);
 		setAdditionalTickers(run.request.tickers?.slice(1).join(", ") ?? "");
 		setMaxGross(String(run.request.max_gross_exposure ?? 1));
@@ -597,9 +606,7 @@ export default function ResearchWorkspace() {
 							</p>
 							{scanned && (
 								<p className="mt-4 text-xs uppercase tracking-wide text-emerald-400">
-									{scanSource === "demo"
-										? "Synthetic demo scan"
-										: "IBKR scan"}{" "}
+									{`${scanSource.toUpperCase()} scan`}{" "}
 									· {candidates.length} results
 								</p>
 							)}
@@ -757,7 +764,7 @@ export default function ResearchWorkspace() {
 											{templates
 												.filter(
 													(t) =>
-														t.language === "python",
+														t.language === language,
 												)
 												.map((t) => (
 													<option
@@ -856,23 +863,23 @@ export default function ResearchWorkspace() {
 								maxLength={64000}
 								onChange={(e) => setCode(e.target.value)}
 							/>
-							<details className="mt-3 text-xs text-slate-400">
+							<Link href="/docs/strategies" className="mt-3 block text-sm text-emerald-300 underline underline-offset-4">Developer docs: write your own Python or C++ strategy →</Link>
+<details className="mt-3 text-xs text-slate-400">
 								<summary className="cursor-pointer text-emerald-300">
 									Strategy interface & execution
 								</summary>
 								<div className="mt-3 space-y-2 leading-relaxed">
 									<p>
-										{language === "python"
+										{additionalTickers.trim() ? (language === "python"
+                      ? "Portfolio context: define Strategy.on_bar(ctx), read ctx.histories[symbol] and ctx.portfolio.positions[symbol], and return None or a dict of signed target weights. Omitted symbols target zero."
+                      : "Portfolio ABI: include strategy_api.h and export on_portfolio with C linkage. Read aligned SA_Asset histories; return 0 to hold or write every target weight and return 1. See the guide above for the exact signature.") : language === "python"
 											? "Define class Strategy with on_bar(self, ctx). ctx.history is completed OHLCV history, ctx.bar is the latest bar, ctx.portfolio exposes cash/shares/equity, and ctx.params contains your numeric parameters. Return None to hold, or 0–1 as a target invested fraction."
 											: 'Include strategy_api.h and export extern "C" double on_bar(const SA_Bar* bars, int count, double cash, int64_t shares, const char* params_json). Return -1 to hold or 0–1 as a target invested fraction. SA_Bar contains timestamp (UTC milliseconds), open, high, low, close, and volume. Use sa_parameter for numeric parameters.'}
 									</p>
 									<p>
 										State persists across bars within one
 										run. Signals fill at the next bar’s
-										open. Warmup calls build state but do
-										not place orders. Use imports or native
-										libraries available in the backend
-										environment.
+										open. Single-stock callbacks run during warmup; portfolio callbacks start after warmup with its history. Python imports use the backend environment. C++ accepts one source file and supplied headers.
 									</p>
 									<p>
 										Run trusted code only. Strategies run
@@ -1079,7 +1086,7 @@ export default function ResearchWorkspace() {
 											className={`${field} mt-1`}
 											type="number"
 											min="0"
-											max="250"
+											max="1000"
 											required
 											value={warmup}
 											onChange={(e) =>
@@ -1110,6 +1117,7 @@ export default function ResearchWorkspace() {
 									/>
 									Force rerun (skip result cache)
 								</label>
+                {replayRunId && <label className="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={replayData} onChange={e=>setReplayData(e.target.checked)} />Reuse loaded run’s exact historical data (works offline; keep symbols, order, dates and interval unchanged)</label>}
 								<div className="flex flex-wrap items-center justify-between gap-3">
 									<p className="max-w-lg text-xs leading-relaxed text-slate-500">
 										Uses completed regular-session bars: up
@@ -1246,6 +1254,8 @@ export default function ResearchWorkspace() {
 										</div>
 									))}
 								</div>
+                {result.metrics.total_slippage_cost != null && <p className="text-sm text-slate-400">Execution costs: slippage {money(result.metrics.total_slippage_cost)}, commissions {money(result.metrics.total_commission ?? 0)}, short borrow {money(result.metrics.total_borrow_cost ?? 0)}.</p>}
+                {result.strategy_diagnostics && <details className="rounded-xl border border-slate-700 p-4"><summary className="cursor-pointer text-sm">Cost-aware strategy decisions</summary><dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2">{Object.entries(result.strategy_diagnostics).filter(([,value])=>typeof value==="number" && Number.isFinite(value)).map(([key,value])=><div key={key}><dt className="text-slate-400">{key.replaceAll("_"," ")}</dt><dd>{value}</dd></div>)}</dl><p className="mt-3 text-xs text-slate-400">The capture scenario is a fraction of the modeled move to the exit band, not a guaranteed expected return. Risk exits and large hedge drift override cost-saving rules.</p></details>}
 								<EquityChart
 									points={result.equity_curve}
 									benchmarkLabel={result.benchmark_label}

@@ -1,4 +1,5 @@
 #include "backtests.hpp"
+#include "relative_value.hpp"
 #include <condition_variable>
 #include <queue>
 namespace sa {
@@ -91,6 +92,22 @@ struct Universe {
   J data, bars, assets, benchmark, counts;
 };
 Universe load_universe(const J &q) {
+  if (q.contains("replay_run_id")) {
+    auto prior = backtest_get(q["replay_run_id"]);
+    if (prior["status"] != "completed" || !prior["result"].is_object())
+      throw Error(422, "Replay requires a completed source run.");
+    for (auto key : {"tickers", "interval", "start_date", "end_date"})
+      if (!prior["request"].contains(key) || prior["request"][key] != q[key])
+        throw Error(
+            422, "Replay must preserve symbols, their order, interval and requested date range.");
+    auto data = prior["result"]["data"];
+    if (!data.contains("assets") || !data.contains("benchmark_bars") || data["bars"].empty())
+      throw Error(422, "This older run does not contain a complete replay dataset.");
+    if (hash(data["assets"].dump() + data["benchmark_bars"].dump()) != data.value("sha256", ""))
+      throw Error(422, "Saved replay dataset failed its integrity check.");
+    return {data, data["bars"], data["assets"], data["benchmark_bars"],
+            data.value("available_bars_before_alignment", J::object())};
+  }
   std::map<std::string, J> histories;
   J source;
   std::vector<std::string> symbols = q["tickers"].get<std::vector<std::string>>();
@@ -143,6 +160,8 @@ J execute(const J &q, const Universe &universe) {
   if (cpp) {
     fs::copy_file(config.root / "simulation/strategy_api.h", dir.path / "strategy_api.h");
     fs::copy_file(config.root / "simulation/pair_math.h", dir.path / "pair_math.h");
+    fs::copy_file(config.root / "simulation/relative_value_math.h",
+                  dir.path / "relative_value_math.h");
     module = dir.path / "strategy.so";
     std::vector<std::string> args = {env("CXX", "c++"), "-std=c++17", "-O3"};
 #ifdef __APPLE__
@@ -221,6 +240,8 @@ class Jobs {
                         {"bar_count", bars.size()},
                         {"sha256", data_hash},
                         {"bars", bars}};
+      if (q.contains("replay_run_id"))
+        result["data"]["replayed_from_run_id"] = q["replay_run_id"];
       result["data"]["tickers"] = q["tickers"];
       result["data"]["assets"] = universe.assets;
       result["data"]["benchmark_ticker"] = "SPY";
@@ -359,6 +380,15 @@ J examples() {
                             (std::string(language) == "python" ? ".py" : ".cpp")));
       result.push_back(entry);
     }
+  for (auto &item : relative_value_catalog()) {
+    if (item["id"] == "event")
+      continue;
+    auto entry = relative_value_strategy(validate_pair({{"relative_value", item["config"]}}));
+    entry["template_id"] = "rv_" + item["id"].get<std::string>();
+    entry["name"] = item["name"];
+    entry["description"] = item["description"];
+    result.push_back(entry);
+  }
   return result;
 }
 J backtest_get(const std::string &id) {

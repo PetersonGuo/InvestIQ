@@ -39,6 +39,7 @@ export default function Dashboard() {
 	const [results, setResults] = useState<SearchResult[]>([]);
 	const [searching, setSearching] = useState(false);
 	const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [alertEvents, setAlertEvents] = useState<{id: string; ticker: string; direction: string; threshold: number; price: number; as_of: string; created_at: string}[]>([]);
 	const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
 	const [error, setError] = useState("");
 	const [notice, setNotice] = useState("");
@@ -57,15 +58,17 @@ export default function Dashboard() {
 	} | null>(null);
 	const [revision, setRevision] = useState(0);
 	const refreshAccount = useCallback(async () => {
-		const [p, a, m] = await Promise.all([
+		const [p, a, m, events] = await Promise.all([
 			api<Portfolio>("portfolio"),
 			api<Alert[]>("alerts"),
 			api<{ provider: string; connected: boolean | null }>(
 				"market/status",
 			),
+      api<typeof alertEvents>("alerts/events"),
 		]);
 		setPortfolio(p);
 		setAlerts(a);
+    setAlertEvents(events);
 		setMarketStatus(m);
 	}, []);
 
@@ -248,14 +251,13 @@ export default function Dashboard() {
 					>
 						Pair alerts
 					</Link>
-					<div className="flex items-center gap-4 text-xs text-slate-400">
+					<Link href="/docs" className="text-sm text-emerald-300">API docs</Link>
+<div className="flex items-center gap-4 text-xs text-slate-400">
 						<span className="h-2 w-2 rounded-full bg-emerald-400" />
 						<span>
 							{marketStatus?.provider === "ibkr"
 								? `IBKR ${marketStatus.connected ? "connected" : "disconnected"}`
-								: marketStatus?.provider === "demo"
-									? "Demo data"
-									: "Historical data"}{" "}
+								: "Historical data"}{" "}
 							· Paper account
 						</span>{" "}
 						<span className="rounded-full bg-[#203043] px-3 py-2 text-slate-200">
@@ -496,7 +498,7 @@ export default function Dashboard() {
 							)}
 							<div className="border-t border-[#243141] px-6 py-4 text-xs text-slate-400">
 								{stock
-									? `${stock.source === "demo" ? "SYNTHETIC DEMO DATA" : stock.source === "ibkr" ? "IBKR · HISTORICAL DATA" : "MASSIVE · HISTORICAL DATA"} · Last bar ${stock.as_of}. `
+									? `${stock.source.toUpperCase()} · HISTORICAL DATA · Last bar ${stock.as_of}. `
 									: ""}
 								{livePrice
 									? "Headline price follows the live feed. Live candles are sampled and may omit trades between updates."
@@ -546,6 +548,7 @@ export default function Dashboard() {
 														: "At or below"}{" "}
 													{money(a.threshold)}
 												</p>
+                        {a.triggered_at && <p className="mt-1 text-xs text-emerald-300">Last triggered {new Date(a.triggered_at).toLocaleString()}</p>}
 											</div>
 											<div className="flex items-center gap-3">
 												<span
@@ -553,8 +556,9 @@ export default function Dashboard() {
 												>
 													{a.active
 														? "Watching"
-														: "Triggered"}
+														: "Paused"}
 												</span>
+                        <button disabled={busy} className="text-xs text-emerald-300" onClick={() => void mutate(() => api(`alerts/${a.id}/state`, {method: "POST", body: JSON.stringify({active: !a.active})}), a.active ? "Alert paused." : "Alert resumed.")}>{a.active ? "Pause" : "Resume"}</button>
 												<button
 													disabled={busy}
 													className="text-xs text-slate-400 hover:text-white"
@@ -598,11 +602,13 @@ export default function Dashboard() {
 								</ul>
 							)}
 							<p className="mt-4 text-xs leading-relaxed text-slate-500">
-								One-shot alerts check the latest daily close
-								every 30 seconds while the backend runs.
-								Triggered alerts appear here; email and push
-								delivery are not enabled.
+								Alerts keep watching until paused or deleted. They check the latest daily close every 30 seconds while the backend runs, and notify again after a later close clears the condition and crosses back. Rules and notifications are saved across refreshes and restarts.
 							</p>
+              <div className="mt-6 border-t border-[#243141] pt-4" role="region" aria-label="Price notification history">
+                <h3 className="text-sm font-semibold">Price notification history</h3>
+                <p className="mt-1 text-xs text-slate-500">Latest 100 saved notifications · deleting a rule preserves its history.</p>
+                {!alertEvents.length ? <p className="mt-3 text-sm text-slate-400">No price notifications yet.</p> : <ul className="divide-y divide-[#243141]">{alertEvents.map(event => <li key={event.id} className="py-3 text-sm"><p>{event.ticker} triggered · {money(event.price)} {event.direction === "above" ? "at or above" : "at or below"} {money(event.threshold)}</p><p className="mt-1 text-xs text-slate-400">Close: {event.as_of} · Notified {new Date(event.created_at).toLocaleString()}</p></li>)}</ul>}
+              </div>
 						</section>
 					</div>
 					<aside className="space-y-6">

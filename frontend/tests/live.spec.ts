@@ -4,7 +4,7 @@ test("live quote updates chart without replacing it and supports IOC paper limit
 	page,
 }) => {
 	await page.goto("/");
-	await expect(page.getByText(/Demo quotes ·/)).toBeVisible();
+	await expect(page.getByText(/Live IBKR ·/)).toBeVisible();
 	await expect(
 		page.getByRole("button", { name: "Follow live", exact: true }),
 	).toBeVisible();

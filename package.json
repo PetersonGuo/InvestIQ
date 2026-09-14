@@ -10,7 +10,7 @@
     "build": "npm run build:backend && npm --prefix frontend run build",
     "lint": "npm --prefix frontend run lint",
     "typecheck": "npm --prefix frontend run typecheck",
-    "test": "npm run build:backend && ctest --test-dir backend/build/native --output-on-failure && backend/.venv/bin/python -m pytest backend/tests/native -q",
+    "test": "npm run build:backend && cmake --build backend/build/native --target stockassist-test-server -j 4 && ctest --test-dir backend/build/native --output-on-failure && backend/.venv/bin/python -m pytest backend/tests/native -q",
     "build:backend": "node scripts/build-native.mjs"
   }
 }

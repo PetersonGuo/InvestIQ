@@ -1,6 +1,10 @@
 # StockAssist
 
-A local stock research workspace with candlestick charts, saved one-shot price alerts, and a persistent paper trading account. The web MVP runs without cloud credentials.
+A local stock research workspace with candlestick charts, saved repeating price alerts, and a persistent paper trading account. Market data requires a connected provider.
+
+## Developer documentation
+
+Open [Developer docs](http://127.0.0.1:3000/docs) in the running app for setup, runnable clients, API field tables and Python/C++ callback guides. The same sources are available here: [Getting started](frontend/public/docs/start.md), [HTTP API](frontend/public/docs/api.md), [Write a strategy](frontend/public/docs/strategies.md), and [Troubleshooting](frontend/public/docs/troubleshooting.md). A complete command-line client is [examples/api/run_backtest.py](examples/api/run_backtest.py).
 
 ## Run
 
@@ -24,28 +28,28 @@ For a production-mode local frontend, run the backend separately and then `npm -
 
 ## What works
 
-- Search by symbol or company, with eight sample symbols in demo mode.
+- Search real stocks by symbol or company through the selected provider.
 - Responsive daily/intraday candlesticks down to one second, older-history paging, and individual trade snapshots.
-- Create, edit/rearm, list, and delete persistent price alerts. A background worker checks every 30 seconds while the API runs; the dashboard refreshes alert status every 15 seconds.
+- Create, edit/rearm, pause/resume, list, and delete persistent price alerts. A background worker checks every 30 seconds while the API runs; the dashboard refreshes alert status every 15 seconds.
 - Buy and sell whole shares in a $100,000 paper account. SQLite transactions prevent overspending and overselling, including concurrent requests. Cash, positions, cost basis, and the last 50 fills persist across restarts.
 - Optional Massive historical data provider, with timeouts, bounded short-lived caching, and explicit upstream errors.
 
 ## Data modes
 
-The default `STOCKASSIST_DATA_MODE=demo` uses deterministic **synthetic** prices. These prices are not historical market observations. Demo weekdays are illustrative and do not model exchange holidays.
+The default `STOCKASSIST_DATA_MODE=ibkr` requires TWS or IB Gateway with socket API access. The application accepts only `ibkr` and `massive`; unavailable data produces an error or an empty state.
 
-To use actual historical daily bars, set these in `backend/.env` (see `.env.example`):
+To use Massive historical daily bars instead, set these in `backend/.env` (see `.env.example`):
 
 ```dotenv
 STOCKASSIST_DATA_MODE=massive
 MASSIVE_API_KEY=your_key
 ```
 
-Existing `POLYGON_API_KEY` is accepted as a fallback key only when Massive mode is explicitly selected. The integration follows the [Massive daily aggregate API](https://massive.com/docs/rest/stocks/aggregates/custom-bars). Access depends on your provider plan. Failed provider requests return errors; they never silently substitute demo data. Provider mode requires validation with your account and is not a live quote feed.
+Existing `POLYGON_API_KEY` is accepted as a fallback key only when Massive mode is explicitly selected. The integration follows the [Massive daily aggregate API](https://massive.com/docs/rest/stocks/aggregates/custom-bars). Access depends on your provider plan. Failed provider requests return errors; they never substitute fabricated data. Provider mode requires validation with your account and is not a live quote feed.
 
-Data is stored in `backend/data/demo.sqlite3`, `backend/data/ibkr.sqlite3`, or `backend/data/massive.sqlite3`, keeping provider accounts separate. Override `STOCKASSIST_DB` to choose another location. Back up the database while the API is stopped. No database reset happens on startup.
+Data is stored in `backend/data/ibkr.sqlite3` or `backend/data/massive.sqlite3`, keeping provider accounts separate. Override `STOCKASSIST_DB` to choose another location. Back up the database while the API is stopped. No database reset happens on startup.
 
-Paper execution uses live IBKR bid/ask quotes: buys pay the ask and sells receive the bid, with a modeled $0.005/share commission ($1 minimum). Market and limit orders are immediate-or-cancel: displayed size caps the fill and the remainder is cancelled. Delayed/frozen, disconnected, stale, or crossed quotes cannot fill. Live orders require regular US hours and a recent trade; short selling is not supported. This is local simulation, without broker routing, depth-based market impact, dividends, or corporate-action adjustments. Demo mode uses explicitly synthetic quotes. Alerts also evaluate daily closes, not intraday crossings. Triggered alerts remain visible until deleted or rearmed; email/push delivery is not implemented.
+Paper execution uses live IBKR bid/ask quotes: buys pay the ask and sells receive the bid, with a modeled $0.005/share commission ($1 minimum). Market and limit orders are immediate-or-cancel: displayed size caps the fill and the remainder is cancelled. Delayed/frozen, disconnected, stale, or crossed quotes cannot fill. Live orders require regular US hours and a recent trade; short selling is not supported. This is local simulation, without broker routing, depth-based market impact, dividends, or corporate-action adjustments. Alerts also evaluate daily closes, not intraday crossings. Price alerts keep watching after triggering and notify again only after a later daily close clears the condition and then crosses back. Rules, pause status, crossing state, and notification history survive refreshes and backend restarts. The latest 100 price notifications are displayed; deleting a rule retains its history. Previously inactive price rules can be resumed explicitly. Email/push delivery is not implemented.
 
 ## Scope and architecture
 
@@ -55,7 +59,7 @@ Paper execution uses live IBKR bid/ask quotes: buys pay the ask and sells receiv
 - `backend/tests/python_reference/`: previous Python implementation, retained as test/reference material and never launched by the app.
 - `stockalert/`: original Flutter counter starter, preserved; not part of the web MVP.
 
-This version is a **local, single-user application**. Bind it to loopback. The existing optional Supabase auth starter is preserved for future work, but it does not isolate or authenticate the local paper account. Public/multi-user hosting requires authenticated API access and per-user storage first. Brokerage execution, mobile functionality, and external notifications are outside this local app. The research workspace now provides modular Python/C++ backtesting.
+This version is a **local, single-user application**. Bind it to loopback. Public/multi-user hosting requires authenticated API access and per-user storage first. Brokerage execution, mobile functionality, and external notifications are outside this local app. The research workspace now provides modular Python/C++ backtesting.
 
 ## Browser verification
 
@@ -106,7 +110,7 @@ A one-shot alert pauses after its first trigger. Enable **Repeat after the condi
 
 The background worker checks about every 30 seconds while the backend is running. The page refreshes status/history every 10 seconds. There is no historical notification backfill after downtime. Alerts use completed daily closes, not intraday quotes. Both legs must share their latest date; missing dates are intersected, not forward-filled. Bars older than seven calendar days, mismatched latest dates, insufficient shared history, or a zero-variance spread do not trigger alerts and produce visible evaluation errors. A subsequent valid check clears the error.
 
-Pair alerts and notifications persist in the current mode's SQLite database. Edit, pause, rearm, or delete rules from the page. Deleting a rule retains its earlier notifications. Notifications are local/in-app only; email, push delivery, and brokerage pair execution are not enabled. Pair-alert controls are separate from portfolio backtest execution and the local paper account.
+New pair alerts repeat by default; uncheck the repeat option for one-shot behavior. Existing pair rules retain their saved repeat setting. Pair alerts and notifications persist in the current mode's SQLite database. Edit, pause, rearm, or delete rules from the page. Deleting a rule retains its earlier notifications. Notifications are local/in-app only; email, push delivery, and brokerage pair execution are not enabled. Pair-alert controls are separate from portfolio backtest execution and the local paper account.
 
 Z-score alerts measure deviation only. They do not test cointegration, fit an optimal hedge ratio, or establish that a pair is suitable to trade. For background on statistical pair construction, see [QuantConnect's pairs research guide](https://www.quantconnect.com/docs/v2/research-environment/applying-research/pca-and-pairs-trading).
 
@@ -124,10 +128,12 @@ Expand **Individual trades · IBKR Time & Sales** for separate trade records and
 
 ### Company fundamentals and news
 
-The stock dashboard includes SEC-reported company fundamentals with per-metric reporting periods and links to source filings, plus recent company-related headlines from your IBKR API news providers. **Read article** opens a text preview; **Refresh company research** checks again. Changing the selected stock updates both panels. Annual financial results are distinguished from newer balance-sheet dates and are not labeled as live or TTM estimates. Optional Massive credentials add company profiles and valuation ratios. Missing provider access is shown explicitly, and demo data is labeled synthetic. See `backend/README.md` for SEC ticker-mapping coverage and provider configuration.
+The stock dashboard includes SEC-reported company fundamentals with per-metric reporting periods and links to source filings, plus recent company-related headlines from your IBKR API news providers. IBKR headlines link to a dedicated article page that can be bookmarked or opened in another tab; publisher URLs open directly when provided. **Read article** also opens an inline preview with the same paragraph, list, table, and link formatting; **Refresh company research** checks again. Changing the selected stock updates both panels. Annual financial results are distinguished from newer balance-sheet dates and are not labeled as live or TTM estimates. Optional Massive credentials add company profiles and valuation ratios. Missing provider access is shown explicitly. See `backend/README.md` for SEC ticker-mapping coverage and provider configuration.
 
 ### Portfolio backtesting and risk
 
 Research now accepts up to ten stocks in one C++-simulated portfolio, with signed long/short weights and Python or C++ strategy code. Load the cointegration-pair or equal-weight-basket starter to get started. Every new run includes SPY buy-and-hold as an S&P 500 price-return reference on the same aligned bars, alongside stock/basket buy-and-hold. The result chart and risk table compare drawdown, volatility, historical tail losses, beta, and gross/net exposure. Default short-borrow costs and execution assumptions are editable/documented in the research workspace.
 
 Pair discovery can filter on Engle–Granger cointegration evidence and find positive or inverse relationships. Previews show spread deviation, test statistics, fitted hedge, and half-life; signals identify both legs' directions. See `backend/simulation/README.md` for the portfolio callback contract, statistical definitions, and model limitations.
+
+Automated tests use a separate `stockassist-test-server` executable and isolated temporary databases. Its deterministic fixtures are excluded from the production server and cannot be enabled through application configuration.

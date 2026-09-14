@@ -1,0 +1,34 @@
+[
+  {
+    "ticker": "SPY",
+    "id": "d2ad9644-10e0-4282-9372-cf65e1b4b1b8",
+    "status": "completed",
+    "error": null,
+    "return": 0.0,
+    "same_data": true
+  },
+  {
+    "ticker": "GLD",
+    "id": "8d632ee7-fe38-4d53-b510-b9c1c7508ceb",
+    "status": "completed",
+    "error": null,
+    "return": 0.0,
+    "same_data": true
+  },
+  {
+    "ticker": "GOOG",
+    "id": "7573f4a4-b53c-4fcf-afcc-cbe3911528e8",
+    "status": "completed",
+    "error": null,
+    "return": 0.0,
+    "same_data": true
+  },
+  {
+    "ticker": "JPM",
+    "id": "7c1ffa09-beaa-4053-8bd1-96688c491492",
+    "status": "completed",
+    "error": null,
+    "return": 3.224174427000004,
+    "same_data": true
+  }
+]

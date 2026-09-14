@@ -4,7 +4,7 @@ import math
 
 def test_live_quote_and_spread_fees(client):
     quote = client.get("/api/stocks/AAPL/quote").json()
-    assert quote["source"] == "demo"
+    assert quote["source"] == "fixture"
     assert quote["bid"] < quote["ask"]
     buy = client.post(
         "/api/order", json={"ticker": "AAPL", "side": "buy", "quantity": 2}

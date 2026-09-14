@@ -13,6 +13,7 @@
 #include <atomic>
 #include <deque>
 #include <iomanip>
+#include <regex>
 #include <sstream>
 namespace sa {
 namespace {
@@ -28,6 +29,8 @@ class Broker : public DefaultEWrapper {
   J values = J::array();
   std::vector<Contract> found;
   std::map<std::string, Contract> contracts;
+  std::map<std::string, J> profiles;
+  J found_profiles = J::array();
   std::map<std::string, std::pair<double, J>> cache;
   std::deque<double> requests;
   std::map<std::string, double> identical;
@@ -85,6 +88,7 @@ class Broker : public DefaultEWrapper {
     ready = false;
     live.clear();
     contracts.clear();
+    profiles.clear();
     cache.clear();
   }
   void wait(bool handshake = false) {
@@ -130,6 +134,7 @@ class Broker : public DefaultEWrapper {
     error_message.clear();
     values = J::array();
     found.clear();
+    found_profiles = J::array();
     return current;
   }
   Contract qualify(const std::string &s) {
@@ -148,6 +153,7 @@ class Broker : public DefaultEWrapper {
     c = found.front();
     c.exchange = "SMART";
     contracts[s] = c;
+    profiles[s] = found_profiles[0];
     return c;
   }
   std::string end_time(const std::string &s) {
@@ -229,6 +235,11 @@ public:
     std::lock_guard lock(mutex);
     try {
       connect();
+      if (op == "profile") {
+        auto ticker = v.at("symbol").get<std::string>();
+        qualify(ticker);
+        return profiles.at(ticker);
+      }
       if (op == "quote")
         return live_quote(v.at("symbol"));
       std::string key = J::array({op, v, ny_date()}).dump();
@@ -427,7 +438,11 @@ public:
         pos += replacement.size();
       }
     }
-    values = {{"text", plain}, {"source", "ibkr"}};
+    // Preserve provider markup for the client's allowlisted article renderer.
+    const bool has_markup = std::regex_search(article, std::regex("<[A-Za-z][^>]*>"));
+    values = {{"text", has_markup ? plain : article.substr(0, 128 * 1024)},
+              {"html", has_markup ? J(article.substr(0, 128 * 1024)) : J(nullptr)},
+              {"source", "ibkr"}};
     done = true;
   }
 
@@ -456,8 +471,16 @@ public:
     }
   }
   void contractDetails(int req, const ContractDetails &d) override {
-    if (req == current)
+    if (req == current) {
       found.push_back(d.contract);
+      found_profiles.push_back({{"ticker", d.contract.symbol},
+                                {"name", d.longName},
+                                {"industry", d.industry},
+                                {"category", d.category},
+                                {"subcategory", d.subcategory},
+                                {"source", "ibkr"},
+                                {"fetched_at", stamp()}});
+    }
   }
   void contractDetailsEnd(int req) override {
     if (req == current)

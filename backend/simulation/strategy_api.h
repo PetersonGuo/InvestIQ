@@ -36,6 +36,9 @@ struct SA_Asset {
   const SA_Bar *bars;
   int64_t shares; // Negative for a short position.
 };
+// Portfolio params also contain engine-owned numeric execution settings:
+// _sa_commission, _sa_slippage_bps, _sa_borrow_rate_percent,
+// _sa_max_gross_exposure. These override user-supplied values.
 // Return 0 to hold; return 1 after writing one target equity weight per asset.
 // Positive weights are long, negative weights short. Total absolute weights
 // must not exceed the run's max_gross_exposure setting.

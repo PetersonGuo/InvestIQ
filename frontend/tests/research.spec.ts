@@ -7,7 +7,7 @@ test('discover a stock, run Python and C++, save, and reopen results', async ({ 
   await page.goto('/research');
   await expect(page.getByLabel('Strategy code')).toContainText('class Strategy');
   await page.getByRole('button', { name: 'Scan US stocks' }).click();
-  await expect(page.getByText('Synthetic demo scan', { exact: false })).toBeVisible();
+  await expect(page.getByText('FIXTURE scan', { exact: false })).toBeVisible();
   await page.getByLabel('Ticker', { exact: true }).fill('AAPL');
   await page.getByLabel('Strategy name').fill('Browser Python strategy');
   await page.getByRole('button', { name: 'Save version' }).click();
@@ -29,6 +29,12 @@ test('discover a stock, run Python and C++, save, and reopen results', async ({ 
   await page.getByRole('button', { name: 'Load inputs' }).click();
   await expect(page.getByLabel('Strategy name')).toHaveValue('Browser C++ strategy');
   await expect(page.getByRole('button', { name: 'C++', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('checkbox', {name:/Reuse loaded run’s exact historical data/}).check();
+  await page.getByLabel('Strategy name').fill('Browser C++ replay');
+  const submitted=page.waitForRequest(r=>r.url().endsWith('/api/backtests') && r.method()==='POST');
+  await page.getByRole('button',{name:'Run backtest',exact:true}).click();
+  expect((await submitted).postDataJSON().replay_run_id).toBeTruthy();
+  await expect(page.getByRole('heading',{name:'AAPL · Browser C++ replay'})).toBeVisible({timeout:20000});
   await page.screenshot({ path: 'test-results/research-desktop.png', fullPage: true });
   expect(errors).toEqual([]);
 });

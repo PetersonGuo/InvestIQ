@@ -48,9 +48,35 @@ J sec_get(const std::string &url, int ttl = 3600) {
 }
 std::string cik_for(const std::string &ticker) {
   static const std::map<std::string, std::string> known = {
-      {"AAPL", "0000320193"},  {"MSFT", "0000789019"}, {"NVDA", "0001045810"},
-      {"GOOGL", "0001652044"}, {"GOOG", "0001652044"}, {"AMZN", "0001018724"},
-      {"META", "0001326801"},  {"TSLA", "0001318605"}};
+      {"AAPL", "0000320193"},
+      {"MSFT", "0000789019"},
+      {"NVDA", "0001045810"},
+      {"GOOGL", "0001652044"},
+      {"GOOG", "0001652044"},
+      {"AMZN", "0001018724"},
+      {"META", "0001326801"},
+      {"TSLA", "0001318605"},
+      // SEC issuer identities verified against data.sec.gov submissions, 2026-09-13.
+      // Keeps covered issuers resolvable when the SEC directory host is unavailable.
+      {"ADI", "0000006281"},
+      {"AMD", "0000002488"},
+      {"AVGO", "0001730168"},
+      {"INTC", "0000050863"},
+      {"MCHP", "0000827054"},
+      {"MPWR", "0001280452"},
+      {"MU", "0000723125"},
+      {"ON", "0001097864"},
+      {"QCOM", "0000804328"},
+      {"QRVO", "0001604778"},
+      {"SWKS", "0000004127"},
+      {"TXN", "0000097476"},
+      {"DIOD", "0000029002"},
+      {"LSCC", "0000855658"},
+      {"RMBS", "0000917273"},
+      {"POWI", "0000833640"},
+      {"ALGM", "0000866291"},
+      {"CRUS", "0000772406"},
+      {"MTSI", "0001493594"}};
   if (known.count(ticker))
     return known.at(ticker);
   auto directory = sec_get("https://www.sec.gov/files/company_tickers.json", 86400);
@@ -145,21 +171,21 @@ J parse_company_facts(const J &company) {
   }
   return {{"name", company.value("entityName", "")}, {"metrics", output}};
 }
+J valuation_company(const std::string &ticker) {
+  auto cik = cik_for(ticker);
+  auto result = sec_get("https://data.sec.gov/api/xbrl/companyfacts/CIK" + cik + ".json");
+  auto submission = sec_get("https://data.sec.gov/submissions/CIK" + cik + ".json");
+  auto listed = submission.value("tickers", J::array());
+  if (std::find(listed.begin(), listed.end(), ticker) == listed.end())
+    throw Error(422, "SEC issuer mapping no longer matches the requested ticker.");
+  result["sic"] = submission.value("sic", "");
+  result["sic_description"] = submission.value("sicDescription", "");
+  result["issuer_tickers"] = submission.value("tickers", J::array());
+  result["source"] = "sec";
+  return result;
+}
 J fundamentals(const std::string &ticker) {
-  if (config.mode == "demo") {
-    auto stock = history(ticker, 2);
-    return {{"ticker", ticker},
-            {"name", stock["name"]},
-            {"source", "demo"},
-            {"fetched_at", stamp()},
-            {"metrics", J::array({{{"label", "Revenue"},
-                                   {"value", 1000000000},
-                                   {"unit", "USD"},
-                                   {"basis", "Synthetic annual example"},
-                                   {"period_end", "2025-12-31"},
-                                   {"filed", "2026-02-15"}}})},
-            {"notes", J::array({"Synthetic demo fundamentals; not actual company financials."})}};
-  }
+
   J result = {{"ticker", ticker},
               {"source", "sec"},
               {"fetched_at", stamp()},
@@ -196,19 +222,7 @@ J fundamentals(const std::string &ticker) {
   return result;
 }
 J company_news(const std::string &ticker) {
-  if (config.mode == "demo") {
-    history(ticker, 2);
-    return {
-        {"ticker", ticker},
-        {"source", "demo"},
-        {"fetched_at", stamp()},
-        {"notes", J::array()},
-        {"articles", J::array({{{"id", "demo-" + ticker},
-                                {"title", ticker + ": example company announcement (synthetic)"},
-                                {"publisher", "Demo news"},
-                                {"published_at", stamp()},
-                                {"url", nullptr}}})}};
-  }
+
   J notes = J::array();
   if (config.mode == "ibkr") {
     try {
